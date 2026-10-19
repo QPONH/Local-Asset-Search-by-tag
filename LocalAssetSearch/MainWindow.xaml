@@ -1,0 +1,94 @@
+<Window x:Class="LocalAssetSearch.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="本地素材搜索" Icon="pack://application:,,,/Assets/app-32.png" Height="860" Width="1320" MinHeight="620" MinWidth="960" Background="{DynamicResource Brush.Window}">
+ <Grid Margin="14"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,10">
+   <TextBlock Text="素材库" FontSize="25" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,20,0"/>
+   <Button Content="添加/扫描目录" Click="Scan_Click"/>
+   <Button Content="标签管理" Click="ManageTags_Click" ToolTip="设置标签分类、改名、删除标签"/>
+   <Button Content="管理文件夹标签" Click="FolderTags_Click"/>
+   <Button Content="恢复已隐藏" Click="RestoreHidden_Click" ToolTip="清空「从工具中删除」的记录（需重新扫描才能恢复索引）"/>
+   <Button Content="导出清单" Click="Export_Click" ToolTip="把当前筛选出的文件夹名称导出成文本清单"/>
+   <Button Content="库另存为…" Click="BackupLibrary_Click" ToolTip="把标签和文件夹列表另存为 JSON 文档；不包含图片，也不会移动磁盘文件"/>
+   <Button Content="读取库…" Click="RestoreLibrary_Click" ToolTip="从 JSON 文档恢复标签和文件夹列表（合并到当前库，不清空）"/>
+   <Button x:Name="ThemeButton" DockPanel.Dock="Right" Content="深色模式" Click="Theme_Click" ToolTip="在浅色与深色之间切换"/>
+  </DockPanel>
+  <Border Grid.Row="1" Background="{DynamicResource Brush.Surface}" CornerRadius="10" Padding="10" Margin="0,0,0,12" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+   <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+    <TextBox x:Name="SearchBox" Grid.Column="0" Margin="3" VerticalContentAlignment="Center" ToolTip="按文件夹名或路径搜索" KeyDown="SearchBox_KeyDown"/>
+    <ComboBox x:Name="MatchBox" Grid.Column="1" Width="90" Margin="3" SelectedIndex="0"><ComboBoxItem Content="AND 全部"/><ComboBoxItem Content="OR 任意"/></ComboBox>
+    <ComboBox x:Name="SortBox" Grid.Column="2" Width="150" Margin="3" SelectionChanged="Sort_Changed" ToolTip="结果排序方式"><ComboBoxItem Content="结尾 {页数,位置}"/><ComboBoxItem Content="结尾 {页数,位置} 倒序"/><ComboBoxItem Content="首字母 A→Z"/><ComboBoxItem Content="首字母 Z→A"/></ComboBox>
+    <Button Grid.Column="3" Content="搜索" Click="Search_Click"/>
+    <Button Grid.Column="4" Content="清除筛选" Click="Clear_Click"/>
+   </Grid>
+  </Border>
+  <Grid Grid.Row="2"><Grid.ColumnDefinitions><ColumnDefinition Width="240"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+   <Border Grid.Column="0" Background="{DynamicResource Brush.Surface}" CornerRadius="10" Padding="12" Margin="0,0,12,0" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+    <DockPanel><TextBlock DockPanel.Dock="Top" Text="标签筛选" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/><TextBlock DockPanel.Dock="Bottom" Text="标签按分类分组。勾选多个后选 AND / OR。点卡片上的标签也能直接筛选。" TextWrapping="Wrap" Foreground="{DynamicResource Brush.Muted}" FontSize="12" Margin="0,8,0,0"/><ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel x:Name="TagPanel"/></ScrollViewer></DockPanel>
+   </Border>
+   <Border Grid.Column="1" Background="{DynamicResource Brush.Surface}" CornerRadius="10" Padding="12" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+    <DockPanel>
+     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+      <TextBlock x:Name="ResultCount" DockPanel.Dock="Left" Text="搜索结果" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
+      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+       <Button Content="全选本页" Padding="8,3" Click="SelectPage_Click"/>
+       <Button Content="取消选择" Padding="8,3" Click="ClearSelection_Click"/>
+       <Button Content="从工具中删除" Padding="8,3" Click="DeleteSelected_Click" ToolTip="只从本工具的索引里移除，磁盘上的原始文件夹不会被删除"/>
+      </StackPanel>
+     </DockPanel>
+     <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+      <TextBlock x:Name="SelectionInfo" DockPanel.Dock="Right" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Muted}" Margin="10,0,0,0"/>
+      <StackPanel Orientation="Horizontal">
+       <Button Content="« 首页" Padding="8,3" Click="FirstPage_Click"/>
+       <Button Content="‹ 上一页" Padding="8,3" Click="PrevPage_Click"/>
+       <TextBlock x:Name="PageInfo" VerticalAlignment="Center" Margin="8,0" MinWidth="110" TextAlignment="Center" Foreground="{DynamicResource Brush.ChipText}"/>
+       <Button Content="下一页 ›" Padding="8,3" Click="NextPage_Click"/>
+       <Button Content="末页 »" Padding="8,3" Click="LastPage_Click"/>
+       <TextBlock Text="每页" VerticalAlignment="Center" Margin="12,0,4,0" Foreground="{DynamicResource Brush.Muted}"/>
+       <ComboBox x:Name="PageSizeBox" Width="72" SelectedIndex="1" SelectionChanged="PageSize_Changed"><ComboBoxItem Content="30"/><ComboBoxItem Content="60"/><ComboBoxItem Content="120"/><ComboBoxItem Content="240"/></ComboBox>
+       <TextBlock Text="跳至" VerticalAlignment="Center" Margin="12,0,4,0" Foreground="{DynamicResource Brush.Muted}"/>
+       <TextBox x:Name="JumpBox" Width="54" VerticalContentAlignment="Center" KeyDown="JumpBox_KeyDown"/>
+       <Button Content="跳转" Padding="8,3" Click="Jump_Click"/>
+      </StackPanel>
+     </DockPanel>
+     <ScrollViewer x:Name="ResultsScroll" VerticalScrollBarVisibility="Auto"><ItemsControl x:Name="Results"><ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel><ItemsControl.ItemTemplate><DataTemplate>
+      <Border Width="280" Margin="5" Padding="7" ContextMenuOpening="Card_ContextMenuOpening" Background="{DynamicResource Brush.Card}" BorderBrush="{DynamicResource Brush.CardBorder}" BorderThickness="1" CornerRadius="8">
+       <Border.ContextMenu>
+        <ContextMenu>
+         <MenuItem Header="看图（左右键翻页）" Click="CtxView_Click"/>
+         <MenuItem Header="用 Windows 图片打开第一张" Click="CtxOpenFirstImage_Click"/>
+         <MenuItem Header="打开文件夹路径" Click="CtxReveal_Click"/>
+         <Separator/>
+         <MenuItem Header="给文件夹打标签…" Click="CtxTag_Click"/>
+         <MenuItem Header="从工具中删除" Click="CtxRemove_Click"/>
+        </ContextMenu>
+       </Border.ContextMenu>
+       <Grid>
+        <Grid.RowDefinitions>
+         <RowDefinition Height="372"/>
+         <RowDefinition Height="22"/>
+         <RowDefinition Height="52"/>
+         <RowDefinition Height="58"/>
+        </Grid.RowDefinitions>
+        <Border Grid.Row="0" Cursor="Hand" MouseLeftButtonUp="Cover_Click" Tag="{Binding Path}" Background="{DynamicResource Brush.Soft}" CornerRadius="6" ClipToBounds="True" ToolTip="点击在工具内看图，左右方向键翻页">
+         <Grid>
+          <Image Source="{Binding ThumbnailPath}" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="5" Padding="3,1" CornerRadius="4" Opacity="0.92" Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+           <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" ToolTip="勾选后可批量「从工具中删除」"/>
+          </Border>
+         </Grid>
+        </Border>
+        <TextBlock Grid.Row="1" Text="{Binding ImageCountLabel}" Foreground="{DynamicResource Brush.Muted}" FontSize="11" Margin="2,4,2,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+        <ItemsControl Grid.Row="2" ItemsSource="{Binding Tags}" Margin="2,5,2,0" ClipToBounds="True"><ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel><ItemsControl.ItemTemplate><DataTemplate>
+         <Button Content="{Binding}" Tag="{Binding}" Click="TagChip_Click" Padding="5,1" Margin="0,0,3,3" FontSize="10" Foreground="{DynamicResource Brush.ChipText}" ToolTip="点此按该标签筛选"/>
+        </DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+        <Border Grid.Row="3" VerticalAlignment="Bottom" Cursor="Hand" MouseLeftButtonUp="Title_Click" Tag="{Binding Path}" Background="{DynamicResource Brush.Input}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" CornerRadius="4" Padding="5,3" ToolTip="点击打开这个文件夹">
+         <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="44"/>
+        </Border>
+       </Grid>
+      </Border>
+     </DataTemplate></ItemsControl.ItemTemplate></ItemsControl></ScrollViewer>
+    </DockPanel>
+   </Border>
+  </Grid>
+  <TextBlock x:Name="StatusText" Grid.Row="3" Text="请选择目录开始建立索引。" Foreground="{DynamicResource Brush.Muted}" Margin="3,10,0,0"/>
+ </Grid>
+</Window>

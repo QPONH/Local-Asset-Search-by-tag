@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- 显式应用清单：以普通权限运行，并声明支持 Windows 10/11。
+         缺少 supportedOS 条目时系统会套用兼容性垫片，行为会变，也可能让杀软评分变差。 -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!-- 应用图标：多尺寸 .ico，资源管理器 / 任务栏 / 单文件 exe 都用它。
+         Assets\app-32.png 给窗口标题栏用（WPF 的 Window.Icon 取 PNG 更可控）。 -->
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+
+    <AssemblyTitle>本地素材搜索</AssemblyTitle>
+    <Product>LocalAssetSearch</Product>
+    <Description>Windows 本地图片素材搜索工具（标签 + 文件夹浏览）</Description>
+    <Company>LocalAssetSearch</Company>
+    <Version>0.13.0</Version>
+    <FileVersion>0.13.0.0</FileVersion>
+    <AssemblyVersion>0.13.0.0</AssemblyVersion>
+    <NeutralLanguage>zh-CN</NeutralLanguage>
+  </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets\app-32.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="8.0.11" />
+    <PackageReference Include="SQLitePCLRaw.provider.winsqlite3" Version="2.1.6" />
+  </ItemGroup>
+</Project>

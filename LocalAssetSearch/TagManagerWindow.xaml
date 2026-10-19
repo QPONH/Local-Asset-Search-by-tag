@@ -1,0 +1,34 @@
+<Window x:Class="LocalAssetSearch.TagManagerWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="标签管理" Icon="pack://application:,,,/Assets/app-32.png" Height="640" Width="760" MinHeight="420" MinWidth="620" Background="{DynamicResource Brush.Window}" WindowStartupLocation="CenterOwner">
+ <Grid Margin="14">
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+
+  <TextBlock Grid.Row="0" TextWrapping="Wrap" Foreground="{DynamicResource Brush.Muted}" Margin="3,0,3,8"
+             Text="给标签设置分类后，左侧筛选栏和「给文件夹打标签」窗口都会按分类分组显示。改完某一行后点该行的「保存」。删除标签只会解除它在文件夹上的关联，不会影响磁盘上的原始目录。"/>
+
+  <Border Grid.Row="1" Background="{DynamicResource Brush.Surface}" CornerRadius="10" Padding="10" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+   <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+    <TextBox Grid.Column="0" x:Name="NewTagName" ToolTip="新标签名"/>
+    <TextBox Grid.Column="1" x:Name="NewTagCategory" ToolTip="分类，可留空"/>
+    <Button Grid.Column="2" Content="新建标签" Click="NewTag_Click"/>
+   </Grid>
+  </Border>
+
+  <Border Grid.Row="2" Background="{DynamicResource Brush.Surface}" CornerRadius="10" Padding="10" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" Margin="0,10,0,0">
+   <DockPanel>
+    <Grid DockPanel.Dock="Top" Margin="2,0,2,6">
+     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="64"/><ColumnDefinition Width="150"/></Grid.ColumnDefinitions>
+     <TextBlock Grid.Column="0" Text="标签名" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Muted}"/>
+     <TextBlock Grid.Column="1" Text="分类" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Muted}"/>
+     <TextBlock Grid.Column="2" Text="使用数" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Muted}"/>
+     <TextBlock Grid.Column="3" Text="操作" FontWeight="SemiBold" Foreground="{DynamicResource Brush.Muted}"/>
+    </Grid>
+    <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel x:Name="RowPanel"/></ScrollViewer>
+   </DockPanel>
+  </Border>
+
+  <DockPanel Grid.Row="3" Margin="0,10,0,0">
+   <Button DockPanel.Dock="Right" Content="关闭" Click="Close_Click" IsCancel="True"/>
+   <TextBlock x:Name="StatusText" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Muted}" TextWrapping="Wrap"/>
+  </DockPanel>
+ </Grid>
+</Window>
