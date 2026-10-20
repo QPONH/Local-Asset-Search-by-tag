@@ -52,6 +52,7 @@ internal static class Program
             StaleCleanupChecks(temp);
             FeatureChecks(temp);
             ArchiveChecks(temp);
+            CategoryChecks(temp);
         }
         finally
         {
@@ -447,6 +448,28 @@ INSERT INTO AssetTags(AssetId,TagId) VALUES (1,1),(2,1),(3,1),(3,2);";
         Check(db.GetHiddenCount() == 0, "恢复后隐藏列表清空");
         db.AddRootAndScan(scanRoot);
         Check(db.Search("", Array.Empty<long>(), true).Any(i => i.Path == victim.Path), "重扫后被移除的文件夹回来了");
+    }
+
+    /// <summary>分类可以先独立创建，标签再选择它。</summary>
+    private static void CategoryChecks(string root)
+    {
+        Console.WriteLine();
+        Console.WriteLine("== 标签分类独立存储 ==");
+
+        var db = new Database(Path.Combine(root, "db-categories"));
+        db.EnsureCategory("先建分类");
+        Check(db.GetCategories().Contains("先建分类"), "分类可以先于标签创建");
+
+        var tagId = db.EnsureTag("分类标签", "先建分类");
+        Check(db.GetTags().First(t => t.Id == tagId).Category == "先建分类", "标签可以选择已有分类");
+
+        db.EnsureCategory("另一个分类");
+        db.SetTagCategory(tagId, "另一个分类");
+        Check(db.GetTags().First(t => t.Id == tagId).Category == "另一个分类", "标签改分类生效");
+        Check(db.GetCategories().Contains("另一个分类"), "改分类后分类仍在列表里");
+
+        db.EnsureTag("无分类标签");
+        Check(db.GetTags().First(t => t.Name == "无分类标签").Category == "", "不选分类就是未分类");
     }
 
     /// <summary>库备份：标签 + 文件夹列表另存为 JSON，再读取回一个空库。</summary>

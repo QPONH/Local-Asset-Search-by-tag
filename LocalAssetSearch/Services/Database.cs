@@ -117,6 +117,7 @@ CREATE TABLE IF NOT EXISTS Assets(
 CREATE INDEX IF NOT EXISTS IX_Assets_ParentPath ON Assets(ParentPath);
 CREATE INDEX IF NOT EXISTS IX_Assets_Name ON Assets(Name);
 CREATE TABLE IF NOT EXISTS Tags(Id INTEGER PRIMARY KEY, Name TEXT NOT NULL UNIQUE COLLATE NOCASE, Color TEXT NOT NULL DEFAULT '#64748b', Category TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS Categories(Id INTEGER PRIMARY KEY, Name TEXT NOT NULL UNIQUE COLLATE NOCASE);
 CREATE TABLE IF NOT EXISTS AssetTags(AssetId INTEGER NOT NULL REFERENCES Assets(Id) ON DELETE CASCADE, TagId INTEGER NOT NULL REFERENCES Tags(Id) ON DELETE CASCADE, PRIMARY KEY(AssetId,TagId));
 CREATE TABLE IF NOT EXISTS Groups(Id INTEGER PRIMARY KEY, Name TEXT NOT NULL UNIQUE COLLATE NOCASE);
 CREATE TABLE IF NOT EXISTS GroupAssets(GroupId INTEGER NOT NULL REFERENCES Groups(Id) ON DELETE CASCADE, AssetId INTEGER NOT NULL REFERENCES Assets(Id) ON DELETE CASCADE, PRIMARY KEY(GroupId,AssetId));
@@ -126,6 +127,7 @@ CREATE TABLE IF NOT EXISTS HiddenPaths(Path TEXT NOT NULL PRIMARY KEY);";
         MigrateKindSchema(c);
         MigrateTagCategoryColumn(c);
         MigrateSortColumns(c);
+        SeedCategories(c);
         using (var pragma = c.CreateCommand()) { pragma.CommandText = "PRAGMA foreign_keys=ON;"; pragma.ExecuteNonQuery(); }
     }
 
@@ -162,6 +164,17 @@ CREATE INDEX IF NOT EXISTS IX_Assets_Name ON Assets(Name);";
     /// 老库的 Tags 表没有 Category 列（分类是后加的功能）。
     /// CREATE TABLE IF NOT EXISTS 不会给已存在的表补列，所以这里显式补一次。
     /// </summary>
+    /// <summary>
+    /// 分类以前只是 Tags.Category 里的文本。为了让分类能独立存在（先建分类、暂时不挂标签），
+    /// 新增 Categories 表；启动时把现有标签用到的分类补进去。
+    /// </summary>
+    private static void SeedCategories(SqliteConnection c)
+    {
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "INSERT OR IGNORE INTO Categories(Name) SELECT DISTINCT TRIM(Category) FROM Tags WHERE TRIM(Category) <> ''";
+        cmd.ExecuteNonQuery();
+    }
+
     private static void MigrateTagCategoryColumn(SqliteConnection c)
     {
         bool hasCategory = false;
@@ -369,7 +382,49 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
             : "INSERT OR IGNORE INTO Tags(Name,Category) VALUES($n,$cat); SELECT Id FROM Tags WHERE Name=$n COLLATE NOCASE";
         cmd.Parameters.AddWithValue("$n",name);
         if (category is not null) cmd.Parameters.AddWithValue("$cat",category.Trim());
-        return (long)(cmd.ExecuteScalar() ?? 0L);
+        var id = (long)(cmd.ExecuteScalar() ?? 0L);
+        var categoryName = (category ?? "").Trim();
+        if (categoryName.Length > 0)
+        {
+            using var cat = c.CreateCommand();
+            cat.CommandText = "INSERT OR IGNORE INTO Categories(Name) VALUES($cat)";
+            cat.Parameters.AddWithValue("$cat", categoryName);
+            cat.ExecuteNonQuery();
+        }
+        return id;
+    }
+
+    /// <summary>所有分类（包括先建好、暂时没有标签的分类），按名称排序。</summary>
+    public List<string> GetCategories()
+    {
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        // 老库的 Categories 可能还没补齐，所以把 Tags.Category 也并进来。
+        cmd.CommandText = @"SELECT Name FROM Categories
+                            UNION
+                            SELECT DISTINCT TRIM(Category) FROM Tags WHERE TRIM(Category) <> ''
+                            ORDER BY Name COLLATE NOCASE";
+        using var r = cmd.ExecuteReader();
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (r.Read())
+        {
+            var name = r.GetString(0).Trim();
+            if (name.Length > 0 && seen.Add(name)) result.Add(name);
+        }
+        return result;
+    }
+
+    /// <summary>先建一个分类；标签本身仍然只引用分类名，不强制先建后用。</summary>
+    public void EnsureCategory(string name)
+    {
+        name = (name ?? "").Trim();
+        if (name.Length == 0) return;
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "INSERT OR IGNORE INTO Categories(Name) VALUES($n)";
+        cmd.Parameters.AddWithValue("$n", name);
+        cmd.ExecuteNonQuery();
     }
 
     public void RenameTag(long tagId, string newName)
@@ -390,10 +445,18 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
 
     public void SetTagCategory(long tagId, string category)
     {
+        var categoryName = (category ?? "").Trim();
         using var c=Open(); using var cmd=c.CreateCommand();
         cmd.CommandText="UPDATE Tags SET Category=$cat WHERE Id=$id";
-        cmd.Parameters.AddWithValue("$cat",(category ?? "").Trim()); cmd.Parameters.AddWithValue("$id",tagId);
+        cmd.Parameters.AddWithValue("$cat",categoryName); cmd.Parameters.AddWithValue("$id",tagId);
         cmd.ExecuteNonQuery();
+        if (categoryName.Length > 0)
+        {
+            using var cat = c.CreateCommand();
+            cat.CommandText = "INSERT OR IGNORE INTO Categories(Name) VALUES($cat)";
+            cat.Parameters.AddWithValue("$cat", categoryName);
+            cat.ExecuteNonQuery();
+        }
     }
 
     /// <summary>删除标签。AssetTags 上有 ON DELETE CASCADE，关联会一起清掉。</summary>

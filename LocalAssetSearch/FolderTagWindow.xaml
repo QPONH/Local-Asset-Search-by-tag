@@ -6,7 +6,7 @@
              Text="在左侧勾选一个或多个文件夹，再点右侧标签即可批量添加或移除。标签框是实心勾表示所选文件夹都带该标签，半选（■）表示只有一部分带；对半选的标签再点一次会把它们全部去掉。"/>
 
   <Grid Grid.Row="1">
-   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="320"/></Grid.ColumnDefinitions>
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="340"/></Grid.ColumnDefinitions>
 
    <Border Grid.Column="0" Background="{DynamicResource Brush.Surface}" CornerRadius="10" Padding="10" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
     <DockPanel>
@@ -22,11 +22,12 @@
     </DockPanel>
    </Border>
 
-   <Border Grid.Column="2" Background="{DynamicResource Brush.Surface}" CornerRadius="10" Padding="10" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+   <Border Grid.Column="2" Background="{DynamicResource Brush.Surface}" CornerRadius="10" Padding="8" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
     <DockPanel>
      <TextBlock DockPanel.Dock="Top" Text="标签" FontSize="15" FontWeight="SemiBold" Margin="2,0,0,6"/>
      <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
       <TextBox x:Name="NewTagBox" ToolTip="输入新标签名，然后点下面的按钮创建并应用"/>
+      <ComboBox x:Name="NewTagCategory" ToolTip="选择分类；新分类在「标签管理」里新增" VerticalContentAlignment="Center"/>
       <Button Content="新建标签并应用" Click="NewTag_Click"/>
      </StackPanel>
      <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel x:Name="TagTogglePanel"/></ScrollViewer>

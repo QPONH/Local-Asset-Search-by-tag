@@ -7,23 +7,31 @@ using LocalAssetSearch.Services;
 namespace LocalAssetSearch;
 
 /// <summary>
-/// 给一批素材打标签的窗口。取代原来那个只能手打标签名的输入框：
-/// 已有标签按分类列出来直接勾选，也能顺手新建。
+/// 给一批素材打标签的窗口。已有标签按分类分组、横向排列，直接勾选；也能顺手新建。
 ///
 /// 勾选是三态的——给多张素材同时打标签时，只有一部分带某标签就显示半选。
 /// </summary>
 public partial class TagPickerWindow : Window
 {
+    private const string Unclassified = "未分类";
+
     private readonly Database _db;
     private readonly List<AssetItem> _targets;
     private readonly Dictionary<long, CheckBox> _tagBoxes = new();
     private readonly Dictionary<long, string> _tagNameById = new();
-    private readonly List<(FrameworkElement Element, string Haystack)> _filterable = new();
+    private readonly List<TagGroup> _groups = new();
     private Dictionary<long, int> _countsByTag = new();
     private bool _suppress;
 
     /// <summary>关窗后主窗口据此决定要不要刷新结果。</summary>
     public bool Changed { get; private set; }
+
+    private sealed class TagGroup
+    {
+        public TextBlock Header = null!;
+        public WrapPanel Panel = null!;
+        public List<(CheckBox Box, string Name)> Items { get; } = new();
+    }
 
     public TagPickerWindow(Database db, List<AssetItem> targets)
     {
@@ -35,8 +43,28 @@ public partial class TagPickerWindow : Window
             ? $"给「{targets[0].Name}」添加或移除标签。勾选即生效，无需另外保存。"
             : $"已选中 {targets.Count} 个素材，勾选标签即可批量添加或移除。标签框为半选（■）表示只有一部分素材带该标签。";
 
+        LoadCategories();
         ReloadCounts();
         BuildTagList();
+    }
+
+    private void LoadCategories()
+    {
+        var choices = new List<string> { Unclassified };
+        choices.AddRange(_db.GetCategories());
+        var current = NewTagCategory.SelectedItem as string;
+        NewTagCategory.ItemsSource = choices;
+        NewTagCategory.SelectedItem = CategoryChoice(choices, current);
+    }
+
+    private static string CategoryChoice(IEnumerable<string> choices, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            var match = choices.FirstOrDefault(c => string.Equals(c, value, StringComparison.OrdinalIgnoreCase));
+            if (match is not null) return match;
+        }
+        return Unclassified;
     }
 
     /// <summary>统计每个标签在选中素材里各被多少个用到。</summary>
@@ -58,7 +86,7 @@ public partial class TagPickerWindow : Window
 
     private void BuildTagList()
     {
-        TagPanel.Children.Clear(); _tagBoxes.Clear(); _tagNameById.Clear(); _filterable.Clear();
+        TagPanel.Children.Clear(); _tagBoxes.Clear(); _tagNameById.Clear(); _groups.Clear();
         var tags = _db.GetTags();
         if (tags.Count == 0)
         {
@@ -67,6 +95,7 @@ public partial class TagPickerWindow : Window
         }
 
         string currentCategory = "";
+        TagGroup? group = null;
         foreach (var tag in tags)
         {
             if (!string.Equals(tag.CategoryLabel, currentCategory, StringComparison.OrdinalIgnoreCase))
@@ -77,18 +106,38 @@ public partial class TagPickerWindow : Window
                     Text = currentCategory,
                     FontWeight = FontWeights.SemiBold,
                     Foreground = ThemeManager.MutedBrush,
-                    Margin = new Thickness(2, 10, 2, 2)
+                    Margin = new Thickness(2, 6, 2, 2),
                 };
                 TagPanel.Children.Add(header);
-                _filterable.Add((header, currentCategory));
+
+                // 一般标签最多四个字，排得密一点：窗口宽度下能放六列。
+                var wrap = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = 110 };
+                TagPanel.Children.Add(wrap);
+                group = new TagGroup { Header = header, Panel = wrap };
+                _groups.Add(group);
             }
 
-            var cb = new CheckBox { Content = tag.Name, Tag = tag.Id, IsThreeState = true, Margin = new Thickness(2, 4, 2, 4) };
+            var label = new TextBlock
+            {
+                Text = tag.Name,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                ToolTip = tag.Name,
+                MaxWidth = 86,
+            };
+            var cb = new CheckBox
+            {
+                Content = label,
+                Tag = tag.Id,
+                IsThreeState = true,
+                Margin = new Thickness(2, 2, 2, 2),
+                Width = 106,
+                ToolTip = tag.Name,
+            };
             cb.Click += TagToggle_Click;
-            TagPanel.Children.Add(cb);
+            group!.Panel.Children.Add(cb);
+            group.Items.Add((cb, tag.Name));
             _tagBoxes[tag.Id] = cb;
             _tagNameById[tag.Id] = tag.Name;
-            _filterable.Add((cb, currentCategory + " " + tag.Name));
         }
         RefreshStates();
     }
@@ -126,13 +175,19 @@ public partial class TagPickerWindow : Window
             : $"已从 {_targets.Count} 个素材移除「{name}」。";
     }
 
+    private static string NormalizeCategory(string? text)
+    {
+        var value = (text ?? "").Trim();
+        return string.Equals(value, Unclassified, StringComparison.Ordinal) ? "" : value;
+    }
+
     private void NewTag_Click(object sender, RoutedEventArgs e)
     {
         var name = NewTagName.Text.Trim();
         if (name.Length == 0) { StatusText.Text = "请先输入标签名称。"; return; }
         try
         {
-            var category = NewTagCategory.Text.Trim();
+            var category = NormalizeCategory(NewTagCategory.SelectedItem as string);
             _db.EnsureTag(name, category.Length == 0 ? null : category);
             foreach (var target in _targets) _db.ApplyTag(target.Id, name);
         }
@@ -140,6 +195,7 @@ public partial class TagPickerWindow : Window
 
         NewTagName.Clear();
         Changed = true;
+        LoadCategories();
         ReloadCounts();
         BuildTagList();
         StatusText.Text = $"已把「{name}」加到 {_targets.Count} 个素材。";
@@ -148,9 +204,20 @@ public partial class TagPickerWindow : Window
     private void Filter_TextChanged(object sender, TextChangedEventArgs e)
     {
         var q = FilterBox.Text.Trim();
-        foreach (var (element, haystack) in _filterable)
-            element.Visibility = q.Length == 0 || haystack.Contains(q, StringComparison.OrdinalIgnoreCase)
-                ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var group in _groups)
+        {
+            var groupMatch = q.Length == 0 || group.Header.Text.Contains(q, StringComparison.OrdinalIgnoreCase);
+            var visible = 0;
+            foreach (var (box, name) in group.Items)
+            {
+                var show = q.Length == 0 || groupMatch || name.Contains(q, StringComparison.OrdinalIgnoreCase);
+                box.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+                if (show) visible++;
+            }
+            var showGroup = q.Length == 0 || visible > 0;
+            group.Header.Visibility = showGroup ? Visibility.Visible : Visibility.Collapsed;
+            group.Panel.Visibility = showGroup ? Visibility.Visible : Visibility.Collapsed;
+        }
     }
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();

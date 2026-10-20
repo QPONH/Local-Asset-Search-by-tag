@@ -1,4 +1,4 @@
-<Window x:Class="LocalAssetSearch.TagPickerWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="给文件夹打标签" Icon="pack://application:,,,/Assets/app-32.png" Height="620" Width="560" MinHeight="420" MinWidth="440" Background="{DynamicResource Brush.Window}" WindowStartupLocation="CenterOwner">
+<Window x:Class="LocalAssetSearch.TagPickerWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="给文件夹打标签" Icon="pack://application:,,,/Assets/app-32.png" Height="640" Width="760" MinHeight="420" MinWidth="560" Background="{DynamicResource Brush.Window}" WindowStartupLocation="CenterOwner">
  <Grid Margin="14">
   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
@@ -6,14 +6,14 @@
 
   <TextBox Grid.Row="1" x:Name="FilterBox" ToolTip="输入关键字筛选标签名或分类" TextChanged="Filter_TextChanged"/>
 
-  <Border Grid.Row="2" Background="{DynamicResource Brush.Surface}" CornerRadius="10" Padding="10" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" Margin="0,8,0,0">
+  <Border Grid.Row="2" Background="{DynamicResource Brush.Surface}" CornerRadius="10" Padding="8" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" Margin="0,8,0,0">
    <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel x:Name="TagPanel"/></ScrollViewer>
   </Border>
 
   <Border Grid.Row="3" Background="{DynamicResource Brush.Surface}" CornerRadius="10" Padding="10" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" Margin="0,8,0,0">
    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-    <TextBox Grid.Column="0" x:Name="NewTagName" ToolTip="新标签名"/>
-    <TextBox Grid.Column="1" x:Name="NewTagCategory" ToolTip="分类，可留空"/>
+    <TextBox Grid.Column="0" x:Name="NewTagName" ToolTip="新标签名" VerticalContentAlignment="Center"/>
+    <ComboBox Grid.Column="1" x:Name="NewTagCategory" ToolTip="选择分类；新分类在「标签管理」里新增" VerticalContentAlignment="Center"/>
     <Button Grid.Column="2" Content="新建并应用" Click="NewTag_Click"/>
    </Grid>
   </Border>

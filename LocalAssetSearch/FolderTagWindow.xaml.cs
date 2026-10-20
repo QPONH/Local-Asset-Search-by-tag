@@ -36,10 +36,30 @@ public partial class FolderTagWindow : Window
         _db = db;
         _folders = folders;
         InitializeComponent();
+        LoadCategories();
         BuildFolderList();
         ReloadTags();
         ReloadFolderTags();
         RefreshTagStates();
+    }
+
+    private void LoadCategories()
+    {
+        var choices = new List<string> { "未分类" };
+        choices.AddRange(_db.GetCategories());
+        var current = NewTagCategory.SelectedItem as string;
+        NewTagCategory.ItemsSource = choices;
+        NewTagCategory.SelectedItem = CategoryChoice(choices, current);
+    }
+
+    private static string CategoryChoice(IEnumerable<string> choices, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            var match = choices.FirstOrDefault(c => string.Equals(c, value, StringComparison.OrdinalIgnoreCase));
+            if (match is not null) return match;
+        }
+        return "未分类";
     }
 
     private void BuildFolderList()
@@ -68,9 +88,10 @@ public partial class FolderTagWindow : Window
         _tagBoxes.Clear(); _tagNameById.Clear(); _tagIdByName.Clear();
         TagTogglePanel.Children.Clear();
         string currentCategory = "";
+        WrapPanel? columnPanel = null;
         foreach (var tag in tags)
         {
-            // 按分类分组，和主界面左侧标签栏保持一致。
+            // 按分类分组，组内横向排列，和主界面左侧标签栏保持一致。
             if (!string.Equals(tag.CategoryLabel, currentCategory, StringComparison.OrdinalIgnoreCase))
             {
                 currentCategory = tag.CategoryLabel;
@@ -79,16 +100,34 @@ public partial class FolderTagWindow : Window
                     Text = currentCategory,
                     FontWeight = FontWeights.SemiBold,
                     Foreground = ThemeManager.MutedBrush,
-                    Margin = new Thickness(2, 10, 2, 2)
+                    Margin = new Thickness(2, 6, 2, 2)
                 });
+                // 四个字的标签排三列，右侧栏不浪费横向空间。
+                columnPanel = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = 100 };
+                TagTogglePanel.Children.Add(columnPanel);
             }
 
             _tagNameById[tag.Id] = tag.Name;
             _tagIdByName[tag.Name] = tag.Id;
-            var cb = new CheckBox { Content = tag.Name, Tag = tag.Id, IsThreeState = true, Margin = new Thickness(2, 4, 2, 4) };
+            var label = new TextBlock
+            {
+                Text = tag.Name,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                ToolTip = tag.Name,
+                MaxWidth = 76,
+            };
+            var cb = new CheckBox
+            {
+                Content = label,
+                Tag = tag.Id,
+                IsThreeState = true,
+                Margin = new Thickness(2, 2, 2, 2),
+                Width = 96,
+                ToolTip = tag.Name,
+            };
             cb.Click += TagToggle_Click;   // 用 Click 而不是 Checked/Unchecked：状态由 RefreshTagStates 统一决定
             _tagBoxes[tag.Id] = cb;
-            TagTogglePanel.Children.Add(cb);
+            columnPanel!.Children.Add(cb);
         }
         if (tags.Count == 0)
             TagTogglePanel.Children.Add(new TextBlock { Text = "还没有任何标签。在下面输入名称即可新建。", Foreground = ThemeManager.MutedBrush, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 4, 2, 0) });
@@ -165,17 +204,25 @@ public partial class FolderTagWindow : Window
         if (selected.Count == 0) { StatusText.Text = "请先在左侧勾选文件夹。"; return; }
         try
         {
-            _db.EnsureTag(name);
+            var category = NormalizeCategory(NewTagCategory.SelectedItem as string);
+            _db.EnsureTag(name, category.Length == 0 ? null : category);
             foreach (var f in selected) _db.ApplyTag(f.Id, name);
         }
         catch (Exception ex) { MessageBox.Show(ex.Message, "新建标签失败", MessageBoxButton.OK, MessageBoxImage.Error); return; }
 
         NewTagBox.Clear();
         Changed = true;
+        LoadCategories();
         ReloadTags();
         ReloadFolderTags();
         RefreshTagStates();
         StatusText.Text = $"已把「{name}」加到 {selected.Count} 个文件夹。";
+    }
+
+    private static string NormalizeCategory(string? text)
+    {
+        var value = (text ?? "").Trim();
+        return string.Equals(value, "未分类", StringComparison.Ordinal) ? "" : value;
     }
 
     private void FolderFilter_TextChanged(object sender, TextChangedEventArgs e)

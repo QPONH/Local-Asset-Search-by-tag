@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using LocalAssetSearch.Models;
 using LocalAssetSearch.Services;
@@ -206,6 +207,50 @@ public partial class App : Application
                 if (result.LinksAdded != 0) throw new InvalidOperationException("同一份文档重复导入不应新增关联");
             });
 
+            // 标签管理：改一行名称/分类后点右下角「保存」，确认一次性写入且窗口关闭。
+            try
+            {
+                var tag = db!.GetTags().First();
+                db.EnsureCategory("统一保存分类");
+                var w = new TagManagerWindow(db)
+                {
+                    WindowState = WindowState.Normal,
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    ShowActivated = false,
+                    ShowInTaskbar = false,
+                    Left = -20000,
+                    Top = -20000,
+                };
+                try
+                {
+                    w.Show();
+                    var row = w.RowPanel.Children.OfType<Grid>().First();
+                    var nameBox = row.Children.OfType<TextBox>().First();
+                    var categoryBox = row.Children.OfType<ComboBox>().First();
+                    var newName = tag.Name + "改";
+                    nameBox.Text = newName;
+                    categoryBox.SelectedItem = "统一保存分类";
+                    w.SaveButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+                    var saved = db.GetTags().FirstOrDefault(t => t.Id == tag.Id);
+                    if (saved is null || saved.Name != newName || saved.Category != "统一保存分类")
+                        throw new InvalidOperationException("统一保存没有写入改名/分类");
+                    if (w.IsVisible) throw new InvalidOperationException("保存后窗口没有关闭");
+                    StartupLog.Write($"自检 标签管理统一保存: {saved.Name} / {saved.Category}");
+                }
+                finally { if (w.IsVisible) w.Close(); }
+            }
+            catch (Exception ex)
+            {
+                failures++;
+                StartupLog.Write($"自检 标签管理统一保存: 失败 -> {ex.GetType().Name}: {ex.Message}");
+            }
+
+            // 造几个同分类标签，专门验证左侧筛选是两列而不是一列。
+            db!.EnsureTag("风景", "布局测试");
+            db!.EnsureTag("人像", "布局测试");
+            db!.EnsureTag("城市", "布局测试");
+
             // 主窗口：显示出来 + 等异步搜索完成 + 强制布局，卡片模板才会实例化。
             try
             {
@@ -224,6 +269,12 @@ public partial class App : Application
                 if (countBlocks.Count == 0) throw new InvalidOperationException("卡片上没有渲染出图片数量那一行");
                 if (countBlocks.Any(t => !t.IsVisible || t.ActualWidth <= 0 || t.ActualHeight <= 0))
                     throw new InvalidOperationException("有数量行不可见或被压成了 0 尺寸");
+
+                // 左侧标签筛选必须是两列：找那个装了 3 个以上标签的 UniformGrid。
+                var tagGrid = Descendants<UniformGrid>(win).FirstOrDefault(g => g.Columns == 2 && g.Children.Count >= 3);
+                if (tagGrid is null)
+                    throw new InvalidOperationException("标签筛选没有按两列布局");
+                StartupLog.Write($"自检 标签筛选两列: 列={tagGrid.Columns} 标签={tagGrid.Children.Count} 宽={tagGrid.ActualWidth:0}");
 
                 win.Close();
             }

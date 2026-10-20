@@ -33,6 +33,7 @@ public static class LibraryArchive
         public int FormatVersion { get; set; } = LibraryArchive.FormatVersion;
         public DateTimeOffset ExportedAt { get; set; } = DateTimeOffset.Now;
         public List<string> Roots { get; set; } = new();
+        public List<string> Categories { get; set; } = new();
         public List<TagRecord> Tags { get; set; } = new();
         public List<FolderRecord> Folders { get; set; } = new();
         public List<string> HiddenPaths { get; set; } = new();
@@ -83,6 +84,13 @@ public static class LibraryArchive
             q.CommandText = "SELECT Path FROM Roots ORDER BY Path";
             using var r = q.ExecuteReader();
             while (r.Read()) doc.Roots.Add(r.GetString(0));
+        }
+
+        using (var q = c.CreateCommand())
+        {
+            q.CommandText = "SELECT Name FROM Categories ORDER BY Name COLLATE NOCASE";
+            using var r = q.ExecuteReader();
+            while (r.Read()) doc.Categories.Add(r.GetString(0));
         }
 
         using (var q = c.CreateCommand())
@@ -170,6 +178,7 @@ public static class LibraryArchive
 
         // JSON 里显式写了 null 时，容错成空集合。
         doc.Roots ??= new();
+        doc.Categories ??= new();
         doc.Tags ??= new();
         doc.Folders ??= new();
         doc.HiddenPaths ??= new();
@@ -240,6 +249,16 @@ public static class LibraryArchive
 
             tagIds[name] = id;
             return id;
+        }
+
+        foreach (var category in doc.Categories ?? new List<string>())
+        {
+            if (string.IsNullOrWhiteSpace(category)) continue;
+            using var ins = c.CreateCommand();
+            ins.Transaction = tx;
+            ins.CommandText = "INSERT OR IGNORE INTO Categories(Name) VALUES($n)";
+            ins.Parameters.AddWithValue("$n", category.Trim());
+            ins.ExecuteNonQuery();
         }
 
         foreach (var t in doc.Tags)

@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Runtime.InteropServices;
@@ -118,6 +119,7 @@ public partial class MainWindow : Window
         {
             TagPanel.Children.Clear(); _tagChecks.Clear(); _tagIdByName.Clear(); _selectedTags.Clear();
             string currentCategory = "";
+            UniformGrid? columnPanel = null;
             foreach (var tag in _db.GetTags())
             {
                 if (!string.Equals(tag.CategoryLabel, currentCategory, StringComparison.OrdinalIgnoreCase))
@@ -128,15 +130,31 @@ public partial class MainWindow : Window
                         Text = currentCategory,
                         FontWeight = FontWeights.SemiBold,
                         Foreground = ThemeManager.MutedBrush,
-                        Margin = new Thickness(2, 10, 2, 2)
+                        Margin = new Thickness(2, 8, 2, 2)
                     });
+                    // 每个分类下面固定两列；UniformGrid 按实际可用宽度分，滚动条也不会把它挤成一列。
+                    columnPanel = new UniformGrid { Columns = 2 };
+                    TagPanel.Children.Add(columnPanel);
                 }
 
                 _tagIdByName[tag.Name] = tag.Id;
-                var cb = new CheckBox { Content = tag.Name, Tag = tag.Id, Margin = new Thickness(2, 5, 2, 5) };
+                var label = new TextBlock
+                {
+                    Text = tag.Name,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    ToolTip = tag.Name,
+                    MaxWidth = 112,
+                };
+                var cb = new CheckBox
+                {
+                    Content = label,
+                    Tag = tag.Id,
+                    Margin = new Thickness(2, 3, 2, 3),
+                    ToolTip = tag.Name,
+                };
                 cb.Checked += async (_, _) => { if (_loadingTags) return; _selectedTags.Add(tag.Id); await SearchFromFirstPageAsync(); };
                 cb.Unchecked += async (_, _) => { if (_loadingTags) return; _selectedTags.Remove(tag.Id); await SearchFromFirstPageAsync(); };
-                TagPanel.Children.Add(cb);
+                columnPanel!.Children.Add(cb);
                 _tagChecks[tag.Id] = cb;
                 if (previously.Contains(tag.Id)) { _selectedTags.Add(tag.Id); cb.IsChecked = true; }
             }
