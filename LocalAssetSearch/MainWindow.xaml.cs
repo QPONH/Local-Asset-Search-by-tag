@@ -654,9 +654,8 @@ public partial class MainWindow : Window
 
             try
             {
-                using var fs = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                var decoder = BitmapDecoder.Create(fs, BitmapCreateOptions.IgnoreColorProfile, BitmapCacheOption.OnLoad);
-                var frame = decoder.Frames[0];
+                // 和看图窗口用同一个解码入口：坏 EXIF 的 JPEG 也能生成缩略图，不用退回 shell 缩略图。
+                var frame = ImageLoader.Load(sourcePath);
                 var scale = Math.Min(1.0, 480.0 / Math.Max(frame.PixelWidth, frame.PixelHeight));
                 var tb = new TransformedBitmap(frame, new ScaleTransform(scale, scale));
                 var enc = new JpegBitmapEncoder { QualityLevel = 82 }; enc.Frames.Add(BitmapFrame.Create(tb));

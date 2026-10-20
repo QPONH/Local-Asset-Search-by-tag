@@ -139,14 +139,7 @@ public partial class ImageViewerWindow : Window
     }
 
     /// <summary>后台线程解码。BitmapSource 必须 Freeze 之后才能交给界面线程。</summary>
-    private static BitmapSource Decode(string path)
-    {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        var decoder = BitmapDecoder.Create(fs, BitmapCreateOptions.IgnoreColorProfile, BitmapCacheOption.OnLoad);
-        var frame = decoder.Frames[0];
-        frame.Freeze();
-        return frame;
-    }
+    private static BitmapSource Decode(string path) => ImageLoader.Load(path);
 
     // ---------- GIF 动画 ----------
 

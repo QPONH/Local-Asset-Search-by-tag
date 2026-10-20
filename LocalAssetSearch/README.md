@@ -1,4 +1,4 @@
-# LocalAssetSearch v0.14.1 — 少依赖版本
+# LocalAssetSearch v0.14.2 — 少依赖版本
 
 Windows 本地**文件夹**素材库工具。目标为 Windows 10 1809+ / Windows 11，使用 .NET 8 WPF、SQLite，并尽可能复用 Windows 自带组件。
 
@@ -46,6 +46,16 @@ Windows 本地**文件夹**素材库工具。目标为 Windows 10 1809+ / Window
 - **库另存为 / 读取库**：把标签、文件夹列表、标签关联、根目录和隐藏路径另存为 JSON（`.laslib.json`），
   换机器或重装后读取回来即可恢复，不用重新扫描/打标签；读取是合并，不会清空当前库。文档不包含图片。
 - **索引和标签不放在 exe 目录**：始终保存在用户数据目录；删除、替换或重新下载 exe 都不影响。
+
+## v0.14.2 变更
+
+- **修复内置看图器对某些 JPEG 报「异常的属性类型或值」**：这类文件的 EXIF 属性类型不合法，
+  WIC 的 `BitmapDecoder` / `JpegBitmapDecoder` 会抛 `FileFormatException`（内部 COM `0x88982F8E`），
+  但同一个文件用 `BitmapImage` 能正常解码。
+- 新增 `Services/ImageLoader`：先走 `BitmapImage`（`OnLoad` + `IgnoreColorProfile`），失败再退回 `BitmapDecoder`；
+  看图窗口和卡片缩略图都改用它。缩略图不再因为坏 EXIF 退回 shell 缩略图。
+- 用实际的 701 号作品验证：该文件夹 183 张图全部可解码，看图窗口 0001.jpg 正常显示。
+- 自检、回归全部通过。
 
 ## v0.14.1 变更
 
@@ -339,7 +349,7 @@ dotnet run
 ### 图标文件
 
 - 源文件：`Assets\app.ico`（16–256 多尺寸）与 `Assets\app-32.png`（窗口标题栏用）。
-- 源码包 `LocalAssetSearch-v0.14.1-src.zip` 内包含这两个文件。
+- 源码包 `LocalAssetSearch-v0.14.2-src.zip` 内包含这两个文件。
 - `release\` 根目录也保留一份，方便查看或替换；exe 已内嵌图标，**替换 exe 旁边的 ico 不会改变 exe 本身**。
 
 > 如果 `dotnet publish` 报 `MSB4018 ... Access to the path ...\LocalAssetSearch.exe is denied`，
