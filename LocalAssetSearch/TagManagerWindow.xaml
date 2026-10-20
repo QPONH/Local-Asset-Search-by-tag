@@ -1,4 +1,4 @@
-<Window x:Class="LocalAssetSearch.TagManagerWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="标签管理" Icon="pack://application:,,,/Assets/app-32.png" Height="700" Width="880" MinHeight="500" MinWidth="720" Background="{DynamicResource Brush.Window}" WindowStartupLocation="CenterOwner">
+<Window x:Class="LocalAssetSearch.TagManagerWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="标签管理" Icon="pack://application:,,,/Assets/app-32.png" Height="700" Width="880" MinHeight="500" MinWidth="720" Background="{DynamicResource Brush.Window}" WindowStartupLocation="CenterScreen" ShowInTaskbar="True">
  <Grid Margin="14">
   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 

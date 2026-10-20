@@ -87,6 +87,14 @@ public partial class MainWindow : Window
             System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
+    /// <summary>刷新当前页时把滚动位置也恢复回来；打标签窗口关闭后不要跳回顶部。</summary>
+    private void RestoreScroll(double offset)
+    {
+        ResultsScroll.ScrollToVerticalOffset(offset);
+        Dispatcher.BeginInvoke(new Action(() => ResultsScroll.ScrollToVerticalOffset(offset)),
+            System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
     private void SetBusy(bool busy) { IsEnabled = !busy; }
 
     private async void Scan_Click(object sender, RoutedEventArgs e)
@@ -181,7 +189,10 @@ public partial class MainWindow : Window
     private async void Search() => await SearchAsync();
     private Task SearchFromFirstPageAsync() { _page = 1; return SearchAsync(); }
 
-    private async Task SearchAsync()
+    /// <summary>自检用：模拟打标签窗口关闭后的刷新，确认页码和滚动位置都不跳。</summary>
+    internal Task RefreshKeepingPositionForTestAsync() => SearchAsync(resetScroll: false);
+
+    private async Task SearchAsync(bool resetScroll = true)
     {
         var version = Interlocked.Increment(ref _searchVersion);
         var keyword = SearchBox?.Text ?? "";
@@ -190,6 +201,7 @@ public partial class MainWindow : Window
         var sort = CurrentSort;
         var offset = (_page - 1) * _pageSize;
         var limit = _pageSize;
+        var keepOffset = resetScroll ? 0 : ResultsScroll.VerticalOffset;
         try
         {
             var (items, total) = await Task.Run(() => _db.SearchPage(keyword, tagIds, matchAll, sort, offset, limit));
@@ -199,7 +211,7 @@ public partial class MainWindow : Window
             if (items.Count == 0 && total > 0 && _page > 1)
             {
                 _page = Math.Max(1, (total + _pageSize - 1) / _pageSize);
-                await SearchAsync();
+                await SearchAsync(resetScroll);
                 return;
             }
 
@@ -214,7 +226,8 @@ public partial class MainWindow : Window
             ResultCount.Text = $"搜索结果（共 {_total:N0} 项）";
             PageInfo.Text = $"第 {_page} / {TotalPages} 页";
             UpdateSelectionInfo();
-            ScrollResultsToTop();
+            if (resetScroll) ScrollResultsToTop();
+            else RestoreScroll(keepOffset);
             StatusText.Text = _total == 0 ? "没有符合条件的文件夹。" : "索引和标签保存在本机；原始文件夹不会被移动或修改。";
         }
         catch (Exception ex) { if (version == Volatile.Read(ref _searchVersion)) StatusText.Text = ex.Message; }
@@ -449,43 +462,55 @@ public partial class MainWindow : Window
 
     // ---------- 标签操作 ----------
 
-    private async void ManageTags_Click(object sender, RoutedEventArgs e)
+    private void ManageTags_Click(object sender, RoutedEventArgs e)
     {
-        var win = new TagManagerWindow(_db) { Owner = this };
-        win.ShowDialog();
-        if (!win.Changed) return;
-        LoadTags();
-        await SearchAsync();
+        var win = new TagManagerWindow(_db);
+        win.Closed += async (_, _) =>
+        {
+            if (!win.Changed || !IsLoaded) return;
+            LoadTags();
+            await SearchAsync(resetScroll: false);
+        };
+        win.Show();
     }
 
-    /// <summary>给单个素材打标签：弹出可选已有标签的窗口，不再是手打输入框。</summary>
-    private async void TagItem_Click(object sender, RoutedEventArgs e)
+    /// <summary>给单个素材打标签：独立窗口，关掉后刷新当前页并保持滚动位置。</summary>
+    private void TagItem_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button b || b.Tag is null || !long.TryParse(b.Tag.ToString(), out var id)) return;
         var target = _results.FirstOrDefault(r => r.Id == id);
         if (target is null) return;
-        await TagOneAsync(target);
+        TagOne(target);
     }
 
-    /// <summary>打开标签选择窗口，改过才刷新列表。</summary>
-    private async Task TagOneAsync(AssetItem item)
+    /// <summary>
+    /// 打开标签选择窗口。刻意不设 Owner、也不用 ShowDialog：
+    /// 否则它会挡住主窗口，主窗口的翻页按钮和看图窗口都点不到。
+    /// </summary>
+    private void TagOne(AssetItem item)
     {
-        var win = new TagPickerWindow(_db, new List<AssetItem> { item }) { Owner = this };
-        win.ShowDialog();
-        if (!win.Changed) return;
-        LoadTags();
-        await SearchAsync();
+        var win = new TagPickerWindow(_db, new List<AssetItem> { item });
+        win.Closed += async (_, _) =>
+        {
+            if (!win.Changed || !IsLoaded) return;
+            LoadTags();
+            await SearchAsync(resetScroll: false);
+        };
+        win.Show();
     }
 
-    private async void FolderTags_Click(object sender, RoutedEventArgs e)
+    private void FolderTags_Click(object sender, RoutedEventArgs e)
     {
         var folders = _db.GetFolders();
         if (folders.Count == 0) { System.Windows.MessageBox.Show("请先扫描一个目录。", "没有已索引目录"); return; }
-        var win = new FolderTagWindow(_db, folders) { Owner = this };
-        win.ShowDialog();
-        if (!win.Changed) return;
-        LoadTags();
-        await SearchAsync();
+        var win = new FolderTagWindow(_db, folders);
+        win.Closed += async (_, _) =>
+        {
+            if (!win.Changed || !IsLoaded) return;
+            LoadTags();
+            await SearchAsync(resetScroll: false);
+        };
+        win.Show();
     }
 
     private void RefreshTags_Click(object sender, RoutedEventArgs e) => LoadTags();
@@ -589,9 +614,9 @@ public partial class MainWindow : Window
         if (_contextItem is { } item) OpenWithWindowsPhotos(item.Path);
     }
 
-    private async void CtxTag_Click(object sender, RoutedEventArgs e)
+    private void CtxTag_Click(object sender, RoutedEventArgs e)
     {
-        if (_contextItem is { } item) await TagOneAsync(item);
+        if (_contextItem is { } item) TagOne(item);
     }
 
     private async void CtxRemove_Click(object sender, RoutedEventArgs e)

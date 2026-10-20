@@ -5,7 +5,7 @@
   <DockPanel Grid.Row="1" Margin="12,4,12,12">
    <TextBlock x:Name="InfoText" DockPanel.Dock="Left" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Muted}" TextTrimming="CharacterEllipsis"/>
    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-    <TextBlock Text="点击任意处 / ← → 翻页　A 自动翻页　Ctrl+W / Esc 关闭" VerticalAlignment="Center" Margin="0,0,14,0" FontSize="11" Foreground="{DynamicResource Brush.Muted}"/>
+    <TextBlock Text="点击任意处 / ← → / 空格 翻页（末页关闭）　A 自动翻页　Ctrl+W / Esc 关闭" VerticalAlignment="Center" Margin="0,0,14,0" FontSize="11" Foreground="{DynamicResource Brush.Muted}"/>
     <ComboBox x:Name="IntervalBox" Width="124" VerticalAlignment="Center" SelectedIndex="0" SelectionChanged="Interval_Changed" ToolTip="自动翻页间隔。最后一页会等满一个间隔后自动关闭，点任意处也会关闭。"><ComboBoxItem Content="不自动翻页"/><ComboBoxItem Content="每 2 秒"/><ComboBoxItem Content="每 3 秒"/><ComboBoxItem Content="每 5 秒"/><ComboBoxItem Content="每 10 秒"/></ComboBox>
     <Button Content="‹ 上一张" Padding="10,4" Click="Prev_Click"/>
     <Button Content="下一张 ›" Padding="10,4" Click="Next_Click"/>

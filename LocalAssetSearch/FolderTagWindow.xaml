@@ -1,4 +1,4 @@
-<Window x:Class="LocalAssetSearch.FolderTagWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="管理文件夹标签" Icon="pack://application:,,,/Assets/app-32.png" Height="660" Width="1020" MinHeight="480" MinWidth="780" Background="{DynamicResource Brush.Window}" WindowStartupLocation="CenterOwner">
+<Window x:Class="LocalAssetSearch.FolderTagWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="管理文件夹标签" Icon="pack://application:,,,/Assets/app-32.png" Height="660" Width="1020" MinHeight="480" MinWidth="780" Background="{DynamicResource Brush.Window}" WindowStartupLocation="CenterScreen" ShowInTaskbar="True">
  <Grid Margin="14">
   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 

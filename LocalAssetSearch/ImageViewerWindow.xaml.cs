@@ -312,6 +312,10 @@ public partial class ImageViewerWindow : Window
                 await StepAsync(-1); e.Handled = true; break;
             case Key.Right:
             case Key.PageDown:
+                await StepAsync(1); e.Handled = true; break;
+            // 空格：普通页翻下一页；已经在最后一页时直接关窗。
+            case Key.Space when AtLast:
+                Close(); e.Handled = true; break;
             case Key.Space:
                 await StepAsync(1); e.Handled = true; break;
             case Key.Home:

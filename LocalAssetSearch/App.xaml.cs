@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using LocalAssetSearch.Models;
 using LocalAssetSearch.Services;
@@ -111,6 +112,8 @@ public partial class App : Application
             var seed = Path.Combine(temp, "示例库");
             Directory.CreateDirectory(Path.Combine(seed, "甲{作者}{1,3}"));
             Directory.CreateDirectory(Path.Combine(seed, "乙{作者}{1,2}"));
+            // 多造一些文件夹，主窗口超过一页，才能验证「刷新后不跳回顶部」。
+            for (int i = 0; i < 70; i++) Directory.CreateDirectory(Path.Combine(seed, $"批量{i:00}"));
 
             // 造一个带真图片的文件夹，看图窗口才有东西可加载。
             var pics = Path.Combine(seed, "有图{a}{1,1}");
@@ -259,6 +262,19 @@ public partial class App : Application
                 await Task.Delay(2000);
                 win.UpdateLayout();
                 StartupLog.Write("自检 MainWindow: 通过（已显示并完成布局，卡片模板已实例化）");
+
+                // 刷新后保持位置：先滚到中间，再按「关闭打标签窗口」的刷新路径重查一次。
+                var scroll = win.ResultsScroll;
+                scroll.ScrollToVerticalOffset(300);
+                win.UpdateLayout();
+                var before = scroll.VerticalOffset;
+                await win.RefreshKeepingPositionForTestAsync();
+                await Task.Delay(300);
+                win.UpdateLayout();
+                var after = scroll.VerticalOffset;
+                StartupLog.Write($"自检 关闭标签后保持位置: before={before:0} after={after:0}");
+                if (before <= 0) throw new InvalidOperationException("结果区没有滚动，测试前提不成立");
+                if (Math.Abs(after - before) > 2) throw new InvalidOperationException($"刷新后滚动位置变了：{before:0} → {after:0}");
 
                 // 真去渲染出来的界面树里找「图片数量」那一行，而且要求它真的有尺寸、真的可见
                 // ——元素存在不等于看得见，被压成 0 高或者被盖住都会「没看到显示」。
@@ -456,9 +472,78 @@ public partial class App : Application
                 StartupLog.Write($"自检 点击任意处翻页 / 末页关闭: 失败 -> {ex.GetType().Name}: {ex.Message}");
             }
 
-            Try("TagManagerWindow", () => new TagManagerWindow(db!).Close());
-            Try("TagPickerWindow", () => new TagPickerWindow(db!, sample.Take(2).ToList()).Close());
-            Try("FolderTagWindow", () => new FolderTagWindow(db!, db!.GetFolders()).Close());
+            // 空格：普通页翻下一页，最后一页直接关窗。
+            try
+            {
+                var w = new ImageViewerWindow(pics)
+                {
+                    WindowState = WindowState.Normal,
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    ShowActivated = false,
+                    ShowInTaskbar = false,
+                    Left = -20000,
+                    Top = -20000,
+                    Width = 480,
+                    Height = 360,
+                };
+                try
+                {
+                    w.Show();
+                    await Task.Delay(300);
+                    await w.ClickAdvanceAsync();
+                    await w.ClickAdvanceAsync();
+                    if (!w.IsAtLastPage) throw new InvalidOperationException("没有停在最后一页");
+
+                    var source = PresentationSource.FromVisual(w);
+                    if (source is null) throw new InvalidOperationException("窗口没有 PresentationSource");
+                    var keyEvent = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, Key.Space)
+                    {
+                        RoutedEvent = Keyboard.PreviewKeyDownEvent,
+                    };
+                    w.RaiseEvent(keyEvent);
+                    await Task.Delay(100);
+                    if (w.IsVisible) throw new InvalidOperationException("最后一页按空格没有关闭窗口");
+                    StartupLog.Write("自检 空格末页关闭: 通过");
+                }
+                finally { if (w.IsVisible) w.Close(); }
+            }
+            catch (Exception ex)
+            {
+                failures++;
+                StartupLog.Write($"自检 空格末页关闭: 失败 -> {ex.GetType().Name}: {ex.Message}");
+            }
+
+            // 三个标签窗口都必须是独立顶层窗口：不设 Owner，否则会挡住主窗口，翻页按钮点不到。
+            Try("TagManagerWindow", () =>
+            {
+                var w = new TagManagerWindow(db!);
+                try
+                {
+                    if (w.Owner is not null) throw new InvalidOperationException("标签管理窗口不应设置 Owner");
+                    if (!w.ShowInTaskbar) throw new InvalidOperationException("标签管理窗口应出现在任务栏");
+                }
+                finally { w.Close(); }
+            });
+            Try("TagPickerWindow", () =>
+            {
+                var w = new TagPickerWindow(db!, sample.Take(2).ToList());
+                try
+                {
+                    if (w.Owner is not null) throw new InvalidOperationException("打标签窗口不应设置 Owner");
+                    if (!w.ShowInTaskbar) throw new InvalidOperationException("打标签窗口应出现在任务栏");
+                }
+                finally { w.Close(); }
+            });
+            Try("FolderTagWindow", () =>
+            {
+                var w = new FolderTagWindow(db!, db!.GetFolders());
+                try
+                {
+                    if (w.Owner is not null) throw new InvalidOperationException("管理文件夹标签窗口不应设置 Owner");
+                    if (!w.ShowInTaskbar) throw new InvalidOperationException("管理文件夹标签窗口应出现在任务栏");
+                }
+                finally { w.Close(); }
+            });
         }
         finally
         {
