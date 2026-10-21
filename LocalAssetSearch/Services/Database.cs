@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS Assets(
  Id INTEGER PRIMARY KEY, Path TEXT NOT NULL UNIQUE, ParentPath TEXT NOT NULL, Name TEXT NOT NULL,
  Kind TEXT NOT NULL CHECK(Kind IN ('folder','image')), Size INTEGER NOT NULL DEFAULT 0,
  ModifiedUtc TEXT NOT NULL, ExistsNow INTEGER NOT NULL DEFAULT 1,
- FavPage INTEGER, FavPos INTEGER, SortTitle TEXT);
+ FavPage INTEGER, FavPos INTEGER, SortTitle TEXT, WorkId TEXT, Authors TEXT, GlobalIndex INTEGER);
 CREATE INDEX IF NOT EXISTS IX_Assets_ParentPath ON Assets(ParentPath);
 CREATE INDEX IF NOT EXISTS IX_Assets_Name ON Assets(Name);
 CREATE TABLE IF NOT EXISTS Tags(Id INTEGER PRIMARY KEY, Name TEXT NOT NULL UNIQUE COLLATE NOCASE, Color TEXT NOT NULL DEFAULT '#64748b', Category TEXT NOT NULL DEFAULT '');
@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS HiddenPaths(Path TEXT NOT NULL PRIMARY KEY);";
         MigrateKindSchema(c);
         MigrateTagCategoryColumn(c);
         MigrateSortColumns(c);
+        MigrateWorkMetadataColumns(c);
         SeedCategories(c);
         using (var pragma = c.CreateCommand()) { pragma.CommandText = "PRAGMA foreign_keys=ON;"; pragma.ExecuteNonQuery(); }
     }
@@ -188,6 +189,93 @@ CREATE INDEX IF NOT EXISTS IX_Assets_Name ON Assets(Name);";
         using var alter = c.CreateCommand();
         alter.CommandText = "ALTER TABLE Tags ADD COLUMN Category TEXT NOT NULL DEFAULT ''";
         alter.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// 识别文件相关的列：WorkId（作品编号）、Authors（作者）、GlobalIndex（站内全局序号）。
+    /// 老库没有这些列，补上；已有记录需要重扫才会回填。
+    /// </summary>
+    private static void MigrateWorkMetadataColumns(SqliteConnection c)
+    {
+        bool hasWorkId = false, hasAuthors = false, hasGlobalIndex = false;
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText = "PRAGMA table_info(Assets)";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var name = r.GetString(1);
+                if (string.Equals(name, "WorkId", StringComparison.OrdinalIgnoreCase)) hasWorkId = true;
+                if (string.Equals(name, "Authors", StringComparison.OrdinalIgnoreCase)) hasAuthors = true;
+                if (string.Equals(name, "GlobalIndex", StringComparison.OrdinalIgnoreCase)) hasGlobalIndex = true;
+            }
+        }
+        if (!hasWorkId)
+        {
+            using var alter = c.CreateCommand();
+            alter.CommandText = "ALTER TABLE Assets ADD COLUMN WorkId TEXT";
+            alter.ExecuteNonQuery();
+        }
+        if (!hasAuthors)
+        {
+            using var alter = c.CreateCommand();
+            alter.CommandText = "ALTER TABLE Assets ADD COLUMN Authors TEXT";
+            alter.ExecuteNonQuery();
+        }
+        if (!hasGlobalIndex)
+        {
+            using var alter = c.CreateCommand();
+            alter.CommandText = "ALTER TABLE Assets ADD COLUMN GlobalIndex INTEGER";
+            alter.ExecuteNonQuery();
+        }
+
+        // 第一次升级到带识别文件的版本：把现有库里的文件夹就地补一遍，
+        // 用户不用为了看到新的标题/顺序而重新扫描整个目录。
+        if (!hasWorkId || !hasAuthors || !hasGlobalIndex) BackfillWorkMetadata(c);
+    }
+
+    /// <summary>升级时按现有 Path 读一次 work-id.json，能读到的就覆盖旧的目录名解析结果。</summary>
+    private static void BackfillWorkMetadata(SqliteConnection c)
+    {
+        var rows = new List<(long Id, string Path, string Name)>();
+        using (var q = c.CreateCommand())
+        {
+            q.CommandText = "SELECT Id, Path, Name FROM Assets WHERE Kind='folder'";
+            using var r = q.ExecuteReader();
+            while (r.Read()) rows.Add((r.GetInt64(0), r.GetString(1), r.GetString(2)));
+        }
+        if (rows.Count == 0) return;
+
+        using var tx = c.BeginTransaction();
+        using var up = c.CreateCommand();
+        up.Transaction = tx;
+        up.CommandText = @"UPDATE Assets SET FavPage=$fp, FavPos=$fpos, SortTitle=$st,
+                           WorkId=$wid, Authors=$authors, GlobalIndex=$gi WHERE Id=$id";
+        var pFp = up.Parameters.Add("$fp", SqliteType.Integer);
+        var pFpos = up.Parameters.Add("$fpos", SqliteType.Integer);
+        var pSt = up.Parameters.Add("$st", SqliteType.Text);
+        var pWid = up.Parameters.Add("$wid", SqliteType.Text);
+        var pAuthors = up.Parameters.Add("$authors", SqliteType.Text);
+        var pGi = up.Parameters.Add("$gi", SqliteType.Integer);
+        var pId = up.Parameters.Add("$id", SqliteType.Integer);
+
+        foreach (var (id, path, name) in rows)
+        {
+            var meta = WorkMetadata.TryRead(path);
+            if (meta is null) continue;
+            var parsed = FavoriteOrder.Parse(name);
+            var favPage = meta.FavoritePage ?? parsed?.Page;
+            var favPos = meta.FavoritePosition ?? (meta.FavoritePage is not null ? 0 : parsed?.Position);
+            pFp.Value = favPage.HasValue ? favPage.Value : (object)DBNull.Value;
+            pFpos.Value = favPos.HasValue ? favPos.Value : (object)DBNull.Value;
+            pSt.Value = string.IsNullOrWhiteSpace(meta.Title) ? FavoriteOrder.TitleOf(name) : meta.Title!;
+            pWid.Value = (object?)meta.WorkId ?? DBNull.Value;
+            pAuthors.Value = (object?)meta.AuthorsText ?? DBNull.Value;
+            pGi.Value = meta.GlobalIndex is int gi ? (object)gi : DBNull.Value;
+            pId.Value = id;
+            up.ExecuteNonQuery();
+        }
+        tx.Commit();
     }
 
     public SqliteConnection Open() { var c = new SqliteConnection(_connectionString); c.Open(); using var cmd=c.CreateCommand(); cmd.CommandText="PRAGMA foreign_keys=ON;"; cmd.ExecuteNonQuery(); return c; }
@@ -265,6 +353,8 @@ CREATE INDEX IF NOT EXISTS IX_Assets_Name ON Assets(Name);";
     {
         SortMode.TitleAsc => "ORDER BY a.SortTitle COLLATE NOCASE, a.Name COLLATE NOCASE",
         SortMode.TitleDesc => "ORDER BY a.SortTitle COLLATE NOCASE DESC, a.Name COLLATE NOCASE DESC",
+        // 识别文件里的 GlobalIndex：数字小的在前，没有识别文件的排最后。
+        SortMode.GlobalIndex => "ORDER BY (a.GlobalIndex IS NULL), a.GlobalIndex, a.Name COLLATE NOCASE",
         // 倒序：页码大的在前，同一页里序号大的在前；解析不出的仍然排最后。
         SortMode.FavoriteOrderDesc => "ORDER BY (a.FavPage IS NULL), a.FavPage DESC, a.FavPos DESC, a.Name COLLATE NOCASE DESC",
         // 默认：解析得出 {页码,序号} 的排前面，页码小的在前，同页里序号小的在前，其余按名称。
@@ -296,15 +386,23 @@ CREATE INDEX IF NOT EXISTS IX_Assets_Name ON Assets(Name);";
         {
             path = Path.GetFullPath(path); seen.Add(path);
             var name = Path.GetFileName(path);
-            var fav = FavoriteOrder.Parse(name);
+            // 优先用 work-id.json 的识别信息；没有或损坏时回退到目录名末尾的 {页数,位置}。
+            var meta = kind == "folder" ? WorkMetadata.TryRead(path) : null;
+            var parsed = FavoriteOrder.Parse(name);
+            var favPage = meta?.FavoritePage ?? parsed?.Page;
+            var favPos = meta?.FavoritePosition ?? (meta?.FavoritePage is not null ? 0 : parsed?.Position);
+            var sortTitle = string.IsNullOrWhiteSpace(meta?.Title) ? FavoriteOrder.TitleOf(name) : meta!.Title!;
             using var cmd = c.CreateCommand(); cmd.Transaction=tx;
-            cmd.CommandText=@"INSERT INTO Assets(Path,ParentPath,Name,Kind,Size,ModifiedUtc,ExistsNow,FavPage,FavPos,SortTitle)
-VALUES($p,$parent,$name,$kind,$size,$modified,1,$favPage,$favPos,$sortTitle)
-ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Name,Kind=excluded.Kind,Size=excluded.Size,ModifiedUtc=excluded.ModifiedUtc,ExistsNow=1,FavPage=excluded.FavPage,FavPos=excluded.FavPos,SortTitle=excluded.SortTitle;";
+            cmd.CommandText=@"INSERT INTO Assets(Path,ParentPath,Name,Kind,Size,ModifiedUtc,ExistsNow,FavPage,FavPos,SortTitle,WorkId,Authors,GlobalIndex)
+VALUES($p,$parent,$name,$kind,$size,$modified,1,$favPage,$favPos,$sortTitle,$workId,$authors,$globalIndex)
+ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Name,Kind=excluded.Kind,Size=excluded.Size,ModifiedUtc=excluded.ModifiedUtc,ExistsNow=1,FavPage=excluded.FavPage,FavPos=excluded.FavPos,SortTitle=excluded.SortTitle,WorkId=excluded.WorkId,Authors=excluded.Authors,GlobalIndex=excluded.GlobalIndex;";
             cmd.Parameters.AddWithValue("$p",path); cmd.Parameters.AddWithValue("$parent",Path.GetDirectoryName(path) ?? ""); cmd.Parameters.AddWithValue("$name",name); cmd.Parameters.AddWithValue("$kind",kind); cmd.Parameters.AddWithValue("$size",size); cmd.Parameters.AddWithValue("$modified",modified.ToUniversalTime().ToString("O"));
-            cmd.Parameters.Add("$favPage", SqliteType.Integer).Value = fav.HasValue ? fav.Value.Page : (object)DBNull.Value;
-            cmd.Parameters.Add("$favPos", SqliteType.Integer).Value = fav.HasValue ? fav.Value.Position : (object)DBNull.Value;
-            cmd.Parameters.AddWithValue("$sortTitle", FavoriteOrder.TitleOf(name));
+            cmd.Parameters.Add("$favPage", SqliteType.Integer).Value = favPage.HasValue ? favPage.Value : (object)DBNull.Value;
+            cmd.Parameters.Add("$favPos", SqliteType.Integer).Value = favPos.HasValue ? favPos.Value : (object)DBNull.Value;
+            cmd.Parameters.AddWithValue("$sortTitle", sortTitle);
+            cmd.Parameters.AddWithValue("$workId", (object?)meta?.WorkId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$authors", (object?)meta?.AuthorsText ?? DBNull.Value);
+            cmd.Parameters.Add("$globalIndex", SqliteType.Integer).Value = meta?.GlobalIndex is int gi ? (object)gi : DBNull.Value;
             cmd.ExecuteNonQuery();
         }
         var stack = new Stack<string>(); stack.Push(root.TrimEnd(Path.DirectorySeparatorChar)); int folderCount=0;
@@ -494,7 +592,7 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
         var where=new List<string>{"a.ExistsNow=1","a.Kind='folder'",
             "NOT EXISTS(SELECT 1 FROM HiddenPaths h WHERE h.Path=a.Path)"};
         var args=new List<(string,object)>();
-        if(!string.IsNullOrWhiteSpace(keyword)){where.Add("(a.Name LIKE $kw ESCAPE '\\' OR a.Path LIKE $kw ESCAPE '\\')");args.Add(("$kw","%"+EscapeLike(keyword.Trim())+"%"));}
+        if(!string.IsNullOrWhiteSpace(keyword)){where.Add("(a.Name LIKE $kw ESCAPE '\\' OR a.Path LIKE $kw ESCAPE '\\' OR a.SortTitle LIKE $kw ESCAPE '\\' OR a.WorkId LIKE $kw ESCAPE '\\' OR a.Authors LIKE $kw ESCAPE '\\')");args.Add(("$kw","%"+EscapeLike(keyword.Trim())+"%"));}
         if(tagIds.Count>0)
         {
             var ids=string.Join(",",tagIds);
@@ -550,7 +648,7 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
     /// 选中的是文件夹时，连同它内部当前已索引的项目一起移除。
     /// 磁盘上的原始文件完全不动。
     /// </summary>
-    public int RemoveFromLibrary(IReadOnlyCollection<long> ids)
+    public int RemoveFromLibrary(IReadOnlyCollection<long> ids, bool hidePaths = true)
     {
         if (ids.Count == 0) return 0;
         var idList = string.Join(",", ids);
@@ -584,8 +682,9 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
         }
 
         using var tx = c.BeginTransaction();
-        using (var hide = c.CreateCommand())
+        if (hidePaths)
         {
+            using var hide = c.CreateCommand();
             hide.Transaction = tx;
             hide.CommandText = "INSERT OR IGNORE INTO HiddenPaths(Path) VALUES($p)";
             hide.Parameters.Add("$p", SqliteType.Text);
@@ -595,10 +694,28 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
                 hide.ExecuteNonQuery();
             }
         }
+
         using (var del = c.CreateCommand())
         {
             del.Transaction = tx;
-            del.CommandText = $"DELETE FROM Assets WHERE Id IN ({idList})";
+            if (hidePaths)
+            {
+                // 原来的「从工具中删除」：只删选中行，子项靠隐藏列表挡住。
+                del.CommandText = $"DELETE FROM Assets WHERE Id IN ({idList})";
+            }
+            else
+            {
+                // 磁盘文件夹已经删掉：按路径前缀删掉选中行和所有子项，也不用写隐藏列表；
+                // 以后从回收站恢复再扫描时可以重新收进来。
+                var clauses = new List<string>();
+                for (int i = 0; i < paths.Count; i++)
+                {
+                    clauses.Add($"(Path=$d{i} OR Path LIKE $q{i} ESCAPE '\\')");
+                    del.Parameters.AddWithValue("$d" + i, paths[i]);
+                    del.Parameters.AddWithValue("$q" + i, EscapeLike(paths[i].TrimEnd('\\') + "\\") + "%");
+                }
+                del.CommandText = $"DELETE FROM Assets WHERE {string.Join(" OR ", clauses)}";
+            }
             del.ExecuteNonQuery();
         }
         tx.Commit();

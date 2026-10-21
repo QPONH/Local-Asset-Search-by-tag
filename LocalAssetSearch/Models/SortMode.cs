@@ -14,4 +14,7 @@ public enum SortMode
 
     /// <summary>按标题首字母倒序（Z→A）。</summary>
     TitleDesc,
+
+    /// <summary>按 work-id.json 里的 GlobalIndex 升序，没有识别文件的排最后。</summary>
+    GlobalIndex,
 }

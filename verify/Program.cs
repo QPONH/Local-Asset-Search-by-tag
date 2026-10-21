@@ -53,6 +53,7 @@ internal static class Program
             FeatureChecks(temp);
             ArchiveChecks(temp);
             CategoryChecks(temp);
+            WorkMetadataChecks(temp);
         }
         finally
         {
@@ -470,6 +471,64 @@ INSERT INTO AssetTags(AssetId,TagId) VALUES (1,1),(2,1),(3,1),(3,2);";
 
         db.EnsureTag("无分类标签");
         Check(db.GetTags().First(t => t.Name == "无分类标签").Category == "", "不选分类就是未分类");
+    }
+
+    /// <summary>work-id.json 作为索引依据：标题、作者、收藏夹页码/位置、GlobalIndex。</summary>
+    private static void WorkMetadataChecks(string root)
+    {
+        Console.WriteLine();
+        Console.WriteLine("== work-id.json 识别索引 ==");
+
+        var scan = Path.Combine(root, "识别库");
+        var metaDir = Path.Combine(scan, "濁音 6{50on!}{愛上陸}{319}");
+        var plainDir = Path.Combine(scan, "无识别{作者}{9}");
+        Directory.CreateDirectory(metaDir);
+        Directory.CreateDirectory(plainDir);
+        File.WriteAllText(Path.Combine(metaDir, "work-id.json"), """
+            {
+              "SchemaVersion": 1,
+              "WorkId": "112462",
+              "Title": "濁音 6",
+              "Authors": ["50on!", "愛上陸"],
+              "FavoritePage": 20,
+              "FavoritePosition": 8,
+              "GlobalIndex": 388,
+              "ImageCount": 21
+            }
+            """);
+
+        var db = new Database(Path.Combine(root, "db-workmeta"));
+        db.AddRootAndScan(scan);
+
+        using var c = db.Open();
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText = "SELECT FavPage,FavPos,SortTitle,WorkId,Authors,GlobalIndex FROM Assets WHERE Path=$p";
+            cmd.Parameters.AddWithValue("$p", metaDir);
+            using var r = cmd.ExecuteReader();
+            if (!r.Read()) throw new InvalidOperationException("没有索引到带 work-id 的文件夹");
+            Check(r.GetInt32(0) == 20, "FavoritePage 用识别文件", r.GetInt32(0).ToString());
+            Check(r.GetInt32(1) == 8, "FavoritePosition 用识别文件", r.GetInt32(1).ToString());
+            Check(r.GetString(2) == "濁音 6", "SortTitle 用识别文件 Title", r.GetString(2));
+            Check(r.GetString(3) == "112462", "保存 WorkId", r.GetString(3));
+            Check(r.GetString(4) == "50on!、愛上陸", "保存 Authors", r.GetString(4));
+            Check(r.GetInt32(5) == 388, "保存 GlobalIndex", r.GetInt32(5).ToString());
+        }
+
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText = "SELECT FavPage,FavPos,SortTitle FROM Assets WHERE Path=$p";
+            cmd.Parameters.AddWithValue("$p", plainDir);
+            using var r = cmd.ExecuteReader();
+            if (!r.Read()) throw new InvalidOperationException("没有索引到无 work-id 的文件夹");
+            Check(r.GetInt32(0) == 9 && r.GetInt32(1) == 0, "无识别文件时回退目录名解析", $"{r.GetInt32(0)},{r.GetInt32(1)}");
+            Check(r.GetString(2) == "无识别", "无识别文件时回退目录名标题", r.GetString(2));
+        }
+
+        Check(db.Search("112462", Array.Empty<long>(), true).Any(i => i.Path == metaDir), "可按 WorkId 搜索");
+        Check(db.Search("愛上陸", Array.Empty<long>(), true).Any(i => i.Path == metaDir), "可按作者搜索");
+        var order = db.Search("", Array.Empty<long>(), true, SortMode.GlobalIndex);
+        Check(order.First().Path == metaDir, "GlobalIndex 排序", string.Join(" | ", order.Select(i => i.Name)));
     }
 
     /// <summary>库备份：标签 + 文件夹列表另存为 JSON，再读取回一个空库。</summary>

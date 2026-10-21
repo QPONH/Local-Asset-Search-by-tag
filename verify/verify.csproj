@@ -17,6 +17,7 @@
     <Compile Include="..\LocalAssetSearch\Services\FolderCover.cs" Link="src\FolderCover.cs" />
     <Compile Include="..\LocalAssetSearch\Services\FavoriteOrder.cs" Link="src\FavoriteOrder.cs" />
     <Compile Include="..\LocalAssetSearch\Services\LibraryArchive.cs" Link="src\LibraryArchive.cs" />
+    <Compile Include="..\LocalAssetSearch\Services\WorkMetadata.cs" Link="src\WorkMetadata.cs" />
     <Compile Include="..\LocalAssetSearch\Models\AssetItem.cs" Link="src\AssetItem.cs" />
     <Compile Include="..\LocalAssetSearch\Models\TagInfo.cs" Link="src\TagInfo.cs" />
     <Compile Include="..\LocalAssetSearch\Models\SortMode.cs" Link="src\SortMode.cs" />

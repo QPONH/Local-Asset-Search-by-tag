@@ -13,9 +13,9 @@
   </DockPanel>
   <Border Grid.Row="1" Background="{DynamicResource Brush.Surface}" CornerRadius="10" Padding="10" Margin="0,0,0,12" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-    <TextBox x:Name="SearchBox" Grid.Column="0" Margin="3" VerticalContentAlignment="Center" ToolTip="按文件夹名或路径搜索" KeyDown="SearchBox_KeyDown"/>
+    <TextBox x:Name="SearchBox" Grid.Column="0" Margin="3" VerticalContentAlignment="Center" ToolTip="按文件夹名、路径、作品编号或作者搜索" KeyDown="SearchBox_KeyDown"/>
     <ComboBox x:Name="MatchBox" Grid.Column="1" Width="90" Margin="3" SelectedIndex="0"><ComboBoxItem Content="AND 全部"/><ComboBoxItem Content="OR 任意"/></ComboBox>
-    <ComboBox x:Name="SortBox" Grid.Column="2" Width="150" Margin="3" SelectionChanged="Sort_Changed" ToolTip="结果排序方式"><ComboBoxItem Content="结尾 {页数,位置}"/><ComboBoxItem Content="结尾 {页数,位置} 倒序"/><ComboBoxItem Content="首字母 A→Z"/><ComboBoxItem Content="首字母 Z→A"/></ComboBox>
+    <ComboBox x:Name="SortBox" Grid.Column="2" Width="190" Margin="3" SelectionChanged="Sort_Changed" ToolTip="结果排序方式"><ComboBoxItem Content="结尾 {页数,位置}"/><ComboBoxItem Content="结尾 {页数,位置} 倒序"/><ComboBoxItem Content="首字母 A→Z"/><ComboBoxItem Content="首字母 Z→A"/><ComboBoxItem Content="识别文件 GlobalIndex"/></ComboBox>
     <Button Grid.Column="3" Content="搜索" Click="Search_Click"/>
     <Button Grid.Column="4" Content="清除筛选" Click="Clear_Click"/>
    </Grid>
@@ -32,6 +32,7 @@
        <Button Content="全选本页" Padding="8,3" Click="SelectPage_Click"/>
        <Button Content="取消选择" Padding="8,3" Click="ClearSelection_Click"/>
        <Button Content="从工具中删除" Padding="8,3" Click="DeleteSelected_Click" ToolTip="只从本工具的索引里移除，磁盘上的原始文件夹不会被删除"/>
+       <Button Content="删除文件夹…" Padding="8,3" Click="DeleteFolders_Click" ToolTip="把所选文件夹移到回收站，并删除本工具的索引/标签关联（可多选）"/>
       </StackPanel>
      </DockPanel>
      <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">

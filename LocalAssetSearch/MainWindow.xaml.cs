@@ -50,14 +50,15 @@ public partial class MainWindow : Window
     }
 
     private static int ReadSavedSortIndex()
-        => int.TryParse(Settings.Get("sort", "0"), out var i) && i >= 0 && i <= 3 ? i : 0;
+        => int.TryParse(Settings.Get("sort", "0"), out var i) && i >= 0 && i <= 4 ? i : 0;
 
-    /// <summary>当前排序方式，与 SortBox 的四个选项一一对应。</summary>
+    /// <summary>当前排序方式，与 SortBox 的五个选项一一对应。</summary>
     private SortMode CurrentSort => SortBox.SelectedIndex switch
     {
         1 => SortMode.FavoriteOrderDesc,
         2 => SortMode.TitleAsc,
         3 => SortMode.TitleDesc,
+        4 => SortMode.GlobalIndex,
         _ => SortMode.FavoriteOrder,
     };
 
@@ -306,6 +307,57 @@ public partial class MainWindow : Window
         finally { SetBusy(false); }
     }
 
+    /// <summary>
+    /// 删除选中的文件夹（移到回收站），同时删除本工具的索引和标签关联。
+    /// 和「从工具中删除」不同：这个会动磁盘上的文件夹。
+    /// </summary>
+    private async void DeleteFolders_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = _results.Where(r => r.IsSelected && r.Kind == "folder").ToList();
+        if (selected.Count == 0)
+        {
+            System.Windows.MessageBox.Show("请先勾选要删除的文件夹。", "没有选中文件夹", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var preview = string.Join("\n", selected.Take(6).Select(r => "· " + r.Path));
+        if (selected.Count > 6) preview += $"\n…等 {selected.Count} 个文件夹";
+        var msg = $"把选中的 {selected.Count} 个文件夹移到回收站，并删除索引/标签关联？\n\n" +
+                  preview + "\n\n" +
+                  "· 文件夹会进入回收站，可以从回收站恢复\n" +
+                  "· 本工具里的索引和标签关联会删除\n" +
+                  "· 请确认这些文件夹不再需要留在原位置";
+        if (System.Windows.MessageBox.Show(msg, "删除文件夹", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            return;
+
+        SetBusy(true);
+        try
+        {
+            var result = await Task.Run(() => FolderDeleter.DeleteToRecycleBin(selected.Select(r => r.Path)));
+            var deleted = new HashSet<string>(result.DeletedPaths, StringComparer.OrdinalIgnoreCase);
+            var ids = selected.Where(r => deleted.Contains(r.Path)).Select(r => r.Id).ToArray();
+            if (ids.Length > 0) _db.RemoveFromLibrary(ids, hidePaths: false);
+
+            LoadTags();
+            await SearchAsync(resetScroll: false);
+            StatusText.Text = $"已把 {result.DeletedFolders} 个文件夹移到回收站，并删除对应索引。";
+
+            if (result.Errors.Count > 0)
+            {
+                var detail = string.Join("\n\n", result.Errors.Take(8));
+                if (result.Errors.Count > 8) detail += $"\n\n…另有 {result.Errors.Count - 8} 个失败";
+                System.Windows.MessageBox.Show(
+                    "以下文件夹没能移入回收站（可能被占用或权限不足），索引已保留：\n\n" + detail,
+                    "部分删除失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(ex.Message, "删除文件夹失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally { SetBusy(false); }
+    }
+
     private async void RestoreHidden_Click(object sender, RoutedEventArgs e)
     {
         var hidden = _db.GetHiddenCount();
@@ -331,6 +383,7 @@ public partial class MainWindow : Window
         SortMode.FavoriteOrderDesc => "结尾 {页数,位置} 倒序",
         SortMode.TitleAsc => "首字母 A→Z",
         SortMode.TitleDesc => "首字母 Z→A",
+        SortMode.GlobalIndex => "识别文件 GlobalIndex",
         _ => "结尾 {页数,位置}",
     };
 

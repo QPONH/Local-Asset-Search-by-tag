@@ -308,6 +308,7 @@ public partial class App : Application
                 {
                     typeof(ContextMenu), typeof(MenuItem), typeof(Separator), typeof(ToolTip),
                     typeof(ComboBox), typeof(ComboBoxItem), typeof(TextBox), typeof(Button),
+                    typeof(ScrollBar),
                 };
                 var missing = need.Where(t => !Application.Current.Resources.Contains(t)).Select(t => t.Name).ToList();
                 if (missing.Count > 0) throw new InvalidOperationException("缺少隐式样式：" + string.Join("、", missing));

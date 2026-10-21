@@ -18,9 +18,9 @@
     <Product>LocalAssetSearch</Product>
     <Description>Windows 本地图片素材搜索工具（标签 + 文件夹浏览）</Description>
     <Company>LocalAssetSearch</Company>
-    <Version>0.15.1</Version>
-    <FileVersion>0.15.1.0</FileVersion>
-    <AssemblyVersion>0.15.1.0</AssemblyVersion>
+    <Version>0.16.0</Version>
+    <FileVersion>0.16.0.0</FileVersion>
+    <AssemblyVersion>0.16.0.0</AssemblyVersion>
     <NeutralLanguage>zh-CN</NeutralLanguage>
   </PropertyGroup>
   <ItemGroup>
