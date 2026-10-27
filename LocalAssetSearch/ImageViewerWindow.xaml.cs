@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using LocalAssetSearch.Services;
@@ -38,6 +39,16 @@ public partial class ImageViewerWindow : Window
     private int _gifIndex;
     private int _gifFrameCount;
 
+    // 滚轮模式：翻页或缩放；缩放后左键拖动平移。
+    private bool _wheelZoom;
+    private double _zoomScale = 1.0;
+    private Point _zoomOffset;
+    private bool _panning;
+    private bool _panMoved;
+    private bool _suppressClick;
+    private Point _panStart;
+    private Point _panOrigin;
+
     // 自检用：确认预设真的启动了计时器、点击真的能推进 / 关闭。
     internal int CurrentIndex => _index;
     internal bool IsAtLastPage => AtLast;
@@ -46,6 +57,8 @@ public partial class ImageViewerWindow : Window
     internal int GifFrameCountForTest => _gifFrameCount;
     internal int GifFrameIndexForTest => _gifIndex;
     internal bool GifAnimatingForTest => _gifTimer.IsEnabled;
+    internal bool WheelZoomModeForTest => _wheelZoom;
+    internal double ZoomScaleForTest => _zoomScale;
 
     public ImageViewerWindow(string folderPath)
     {
@@ -57,6 +70,10 @@ public partial class ImageViewerWindow : Window
         _files = FolderCover.ListImages(folderPath);
         // 从封面那张开始，也就是「第一张」。
         _index = Math.Max(0, _files.IndexOf(FolderCover.Find(folderPath)));
+
+        // 滚轮模式是全局偏好，所有看图窗口共用。
+        _wheelZoom = string.Equals(Settings.Get("viewer.wheel", "page"), "zoom", StringComparison.OrdinalIgnoreCase);
+        WheelBox.SelectedIndex = _wheelZoom ? 1 : 0;
 
         _timer.Tick += Timer_Tick;
         _gifTimer.Tick += Gif_Tick;
@@ -83,6 +100,7 @@ public partial class ImageViewerWindow : Window
     private async Task ShowCurrentAsync()
     {
         StopGif();
+        ResetZoom();
         if (_files.Count == 0)
         {
             Picture.Source = null;
@@ -292,13 +310,159 @@ public partial class ImageViewerWindow : Window
 
     // ---------- 点窗口任意处 ----------
 
-    private async void Surface_Click(object sender, MouseButtonEventArgs e) => await ClickAdvanceAsync();
+    private async void Surface_Click(object sender, MouseButtonEventArgs e)
+    {
+        // 缩放模式下拖动过画面时，这一次抬手不算点击翻页。
+        if (_suppressClick)
+        {
+            _suppressClick = false;
+            return;
+        }
+        await ClickAdvanceAsync();
+    }
 
     /// <summary>点窗口任意处：普通页翻下一页，最后一页关闭。</summary>
     internal async Task ClickAdvanceAsync()
     {
         if (AtLast) { Close(); return; }
         await StepAsync(1);
+    }
+
+    // ---------- 滚轮：翻页 / 缩放 ----------
+
+    private void Wheel_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_initializing) return;
+        _wheelZoom = WheelBox.SelectedIndex == 1;
+        Settings.Set("viewer.wheel", _wheelZoom ? "zoom" : "page");
+        if (!_wheelZoom) ResetZoom();
+        else UpdateZoomCursor();
+    }
+
+    private async void Viewport_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (_files.Count == 0) return;
+        e.Handled = true;
+
+        if (!_wheelZoom)
+        {
+            if (e.Delta > 0) await StepAsync(-1);
+            else if (e.Delta < 0) await StepAsync(1);
+            return;
+        }
+
+        // 用 Viewport 坐标算锚点。不要用 e.GetPosition(Picture)：Picture 上的
+        // RenderTransform 会让它返回已经受缩放/平移影响的位置，放大几次就会漂。
+        var cursor = e.GetPosition(Viewport);
+        var origin = VisualTreeHelper.GetOffset(Picture);
+        var local = new Point(cursor.X - origin.X, cursor.Y - origin.Y);
+
+        var factor = Math.Pow(1.15, e.Delta / 120.0);
+        var newScale = Math.Clamp(_zoomScale * factor, 1.0, 6.0);
+        if (newScale <= 1.001)
+        {
+            ResetZoom();
+            return;
+        }
+
+        // TransformGroup 先缩放再平移，screen = local * scale + offset。
+        // 鼠标下的画面点 = (local - offset) / oldScale，必须让它落在同一个屏幕位置。
+        // 注意 offset 不能直接用 local 乘缩放差：offset 非 0 时（已经放大/平移过）
+        // 那样算会把“缩小”算成一次平移，尤其鼠标在左右两侧时偏移会很大。
+        _zoomOffset = ZoomOffsetAfter(local, _zoomOffset, _zoomScale, newScale);
+        _zoomScale = newScale;
+        UpdateZoomTransform();
+    }
+
+    private void Viewport_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        // 上一次拖动结束时有些情况下根 Grid 收不到 MouseUp，标志会留到下一次点击；
+        // 每次按下先清掉，避免吞掉接下来的第一次翻页点击。
+        _suppressClick = false;
+        if (!_wheelZoom || _zoomScale <= 1.001) return;
+        _panning = true;
+        _panMoved = false;
+        _panStart = e.GetPosition(Viewport);
+        _panOrigin = _zoomOffset;
+        Viewport.CaptureMouse();
+    }
+
+    private void Viewport_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_panning) return;
+        var current = e.GetPosition(Viewport);
+        var dx = current.X - _panStart.X;
+        var dy = current.Y - _panStart.Y;
+        if (!_panMoved && (Math.Abs(dx) > 3 || Math.Abs(dy) > 3)) _panMoved = true;
+        if (!_panMoved) return;
+
+        _zoomOffset = new Point(_panOrigin.X + dx, _panOrigin.Y + dy);
+        UpdateZoomTransform();
+        e.Handled = true;
+    }
+
+    private void Viewport_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_panning) return;
+        var moved = _panMoved;
+        _panning = false;
+        _panMoved = false;
+        Viewport.ReleaseMouseCapture();
+        // 拖过画面就不再让点击事件翻页；没拖动则保留原来的「点任意处翻页」。
+        if (moved)
+        {
+            _suppressClick = true;
+            e.Handled = true;
+        }
+    }
+
+    private void Viewport_LostMouseCapture(object sender, MouseEventArgs e)
+    {
+        _panning = false;
+        _panMoved = false;
+    }
+
+    /// <summary>
+    /// 计算缩放后的平移量，保证 local（相对 Picture 布局原点）处的画面点不动。
+    /// screen = local * scale + offset，所以：
+    ///   anchor = (local - oldOffset) / oldScale
+    ///   newOffset = local - anchor * newScale
+    /// </summary>
+    internal static Point ZoomOffsetAfter(Point local, Point oldOffset, double oldScale, double newScale)
+    {
+        if (oldScale <= 0) return oldOffset;
+        double ax = (local.X - oldOffset.X) / oldScale;
+        double ay = (local.Y - oldOffset.Y) / oldScale;
+        return new Point(local.X - ax * newScale, local.Y - ay * newScale);
+    }
+
+    private void UpdateZoomTransform()
+    {
+        PictureScale.ScaleX = _zoomScale;
+        PictureScale.ScaleY = _zoomScale;
+        PictureTranslate.X = _zoomOffset.X;
+        PictureTranslate.Y = _zoomOffset.Y;
+        UpdateZoomCursor();
+    }
+
+    private void ResetZoom()
+    {
+        _zoomScale = 1.0;
+        _zoomOffset = default;
+        _panning = false;
+        _panMoved = false;
+        _suppressClick = false;
+        if (Viewport.IsMouseCaptured) Viewport.ReleaseMouseCapture();
+        PictureScale.ScaleX = 1.0;
+        PictureScale.ScaleY = 1.0;
+        PictureTranslate.X = 0;
+        PictureTranslate.Y = 0;
+        UpdateZoomCursor();
+    }
+
+    private void UpdateZoomCursor()
+    {
+        Viewport.Cursor = _wheelZoom && _zoomScale > 1.001 ? Cursors.SizeAll : Cursors.Arrow;
     }
 
     // ---------- 键盘 ----------

@@ -1,11 +1,27 @@
 <Window x:Class="LocalAssetSearch.ImageViewerWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="看图" Icon="pack://application:,,,/Assets/app-32.png" Height="900" Width="1200" MinHeight="420" MinWidth="620" WindowState="Maximized" WindowStartupLocation="CenterScreen" ShowInTaskbar="True" Background="{DynamicResource Brush.Window}" PreviewKeyDown="Window_PreviewKeyDown">
  <Grid Background="{DynamicResource Brush.Window}" MouseLeftButtonUp="Surface_Click">
   <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <Image x:Name="Picture" Grid.Row="0" Stretch="Uniform" Margin="8" RenderOptions.BitmapScalingMode="HighQuality"/>
+  <Grid x:Name="Viewport" Grid.Row="0" ClipToBounds="True" Background="Transparent"
+        MouseWheel="Viewport_MouseWheel"
+        MouseLeftButtonDown="Viewport_MouseLeftButtonDown"
+        MouseMove="Viewport_MouseMove"
+        MouseLeftButtonUp="Viewport_MouseLeftButtonUp"
+        LostMouseCapture="Viewport_LostMouseCapture"
+        ToolTip="滚轮按下方选择翻页或缩放；缩放后按住左键拖动画面">
+   <Image x:Name="Picture" Stretch="Uniform" Margin="8" RenderOptions.BitmapScalingMode="HighQuality" RenderTransformOrigin="0,0">
+    <Image.RenderTransform>
+     <TransformGroup>
+      <ScaleTransform x:Name="PictureScale" ScaleX="1" ScaleY="1"/>
+      <TranslateTransform x:Name="PictureTranslate"/>
+     </TransformGroup>
+    </Image.RenderTransform>
+   </Image>
+  </Grid>
   <DockPanel Grid.Row="1" Margin="12,4,12,12">
    <TextBlock x:Name="InfoText" DockPanel.Dock="Left" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Muted}" TextTrimming="CharacterEllipsis"/>
    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
     <TextBlock Text="点击任意处 / ← → / 空格 翻页（末页关闭）　A 自动翻页　Ctrl+W / Esc 关闭" VerticalAlignment="Center" Margin="0,0,14,0" FontSize="11" Foreground="{DynamicResource Brush.Muted}"/>
+    <ComboBox x:Name="WheelBox" Width="98" VerticalAlignment="Center" SelectedIndex="0" SelectionChanged="Wheel_Changed" ToolTip="鼠标滚轮：翻页或缩放。缩放下按住左键拖动画面。"><ComboBoxItem Content="滚轮翻页"/><ComboBoxItem Content="滚轮缩放"/></ComboBox>
     <ComboBox x:Name="IntervalBox" Width="124" VerticalAlignment="Center" SelectedIndex="0" SelectionChanged="Interval_Changed" ToolTip="自动翻页间隔。最后一页会等满一个间隔后自动关闭，点任意处也会关闭。"><ComboBoxItem Content="不自动翻页"/><ComboBoxItem Content="每 2 秒"/><ComboBoxItem Content="每 3 秒"/><ComboBoxItem Content="每 5 秒"/><ComboBoxItem Content="每 10 秒"/></ComboBox>
     <Button Content="‹ 上一张" Padding="10,4" Click="Prev_Click"/>
     <Button Content="下一张 ›" Padding="10,4" Click="Next_Click"/>

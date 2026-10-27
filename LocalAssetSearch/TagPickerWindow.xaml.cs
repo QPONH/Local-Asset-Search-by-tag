@@ -13,8 +13,6 @@ namespace LocalAssetSearch;
 /// </summary>
 public partial class TagPickerWindow : Window
 {
-    private const string Unclassified = "未分类";
-
     private readonly Database _db;
     private readonly List<AssetItem> _targets;
     private readonly Dictionary<long, CheckBox> _tagBoxes = new();
@@ -50,21 +48,11 @@ public partial class TagPickerWindow : Window
 
     private void LoadCategories()
     {
-        var choices = new List<string> { Unclassified };
+        var choices = new List<string> { TagCategory.Unclassified };
         choices.AddRange(_db.GetCategories());
         var current = NewTagCategory.SelectedItem as string;
         NewTagCategory.ItemsSource = choices;
-        NewTagCategory.SelectedItem = CategoryChoice(choices, current);
-    }
-
-    private static string CategoryChoice(IEnumerable<string> choices, string? value)
-    {
-        if (!string.IsNullOrWhiteSpace(value))
-        {
-            var match = choices.FirstOrDefault(c => string.Equals(c, value, StringComparison.OrdinalIgnoreCase));
-            if (match is not null) return match;
-        }
-        return Unclassified;
+        NewTagCategory.SelectedItem = TagCategory.Choice(choices, current);
     }
 
     /// <summary>统计每个标签在选中素材里各被多少个用到。</summary>
@@ -175,19 +163,13 @@ public partial class TagPickerWindow : Window
             : $"已从 {_targets.Count} 个素材移除「{name}」。";
     }
 
-    private static string NormalizeCategory(string? text)
-    {
-        var value = (text ?? "").Trim();
-        return string.Equals(value, Unclassified, StringComparison.Ordinal) ? "" : value;
-    }
-
     private void NewTag_Click(object sender, RoutedEventArgs e)
     {
         var name = NewTagName.Text.Trim();
         if (name.Length == 0) { StatusText.Text = "请先输入标签名称。"; return; }
         try
         {
-            var category = NormalizeCategory(NewTagCategory.SelectedItem as string);
+            var category = TagCategory.Normalize(NewTagCategory.SelectedItem as string);
             _db.EnsureTag(name, category.Length == 0 ? null : category);
             foreach (var target in _targets) _db.ApplyTag(target.Id, name);
         }

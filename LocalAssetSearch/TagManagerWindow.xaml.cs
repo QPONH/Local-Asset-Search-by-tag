@@ -15,8 +15,6 @@ namespace LocalAssetSearch;
 /// </summary>
 public partial class TagManagerWindow : Window
 {
-    private const string Unclassified = "未分类";
-
     private readonly Database _db;
     private readonly List<string> _categories = new();
     private readonly List<TagRow> _rows = new();
@@ -55,7 +53,7 @@ public partial class TagManagerWindow : Window
 
     private List<string> CategoryChoices()
     {
-        var choices = new List<string> { Unclassified };
+        var choices = new List<string> { TagCategory.Unclassified };
         choices.AddRange(_categories);
         return choices;
     }
@@ -69,13 +67,13 @@ public partial class TagManagerWindow : Window
             var choices = CategoryChoices();
             var newTagCurrent = NewTagCategory.SelectedItem as string;
             NewTagCategory.ItemsSource = choices;
-            NewTagCategory.SelectedItem = CategoryChoice(choices, newTagCurrent);
+            NewTagCategory.SelectedItem = TagCategory.Choice(choices, newTagCurrent);
 
             foreach (var row in _rows)
             {
                 var current = row.CategoryBox.SelectedItem as string;
                 row.CategoryBox.ItemsSource = new List<string>(choices);
-                row.CategoryBox.SelectedItem = CategoryChoice(choices, current);
+                row.CategoryBox.SelectedItem = TagCategory.Choice(choices, current);
             }
         }
         finally { _building = false; }
@@ -121,13 +119,13 @@ public partial class TagManagerWindow : Window
         };
 
         var initialCategory = tag is null
-            ? (string.IsNullOrWhiteSpace(draftCategory) ? Unclassified : draftCategory.Trim())
-            : (string.IsNullOrWhiteSpace(tag.Category) ? Unclassified : tag.Category);
+            ? (string.IsNullOrWhiteSpace(draftCategory) ? TagCategory.Unclassified : draftCategory.Trim())
+            : (string.IsNullOrWhiteSpace(tag.Category) ? TagCategory.Unclassified : tag.Category);
         var choices = CategoryChoices();
         row.CategoryBox = new ComboBox
         {
             ItemsSource = choices,
-            SelectedItem = CategoryChoice(choices, initialCategory),
+            SelectedItem = TagCategory.Choice(choices, initialCategory),
             Margin = new Thickness(0, 0, 6, 0),
             VerticalContentAlignment = VerticalAlignment.Center,
             ToolTip = "选择分类；新分类先在顶部「新增分类」里加",
@@ -209,7 +207,7 @@ public partial class TagManagerWindow : Window
             return;
         }
 
-        var category = NormalizeCategory(NewTagCategory.SelectedItem as string);
+        var category = TagCategory.Normalize(NewTagCategory.SelectedItem as string);
         AddRow(null, name, category);
         NewTagName.Clear();
         MarkDirty();
@@ -220,7 +218,7 @@ public partial class TagManagerWindow : Window
     {
         var name = NewCategoryName.Text.Trim();
         if (name.Length == 0) { StatusText.Text = "请先输入分类名称。"; return; }
-        if (string.Equals(name, Unclassified, StringComparison.Ordinal)) { StatusText.Text = "「未分类」是保留名称。"; return; }
+        if (string.Equals(name, TagCategory.Unclassified, StringComparison.Ordinal)) { StatusText.Text = "「未分类」是保留名称。"; return; }
         if (_categories.Any(c => string.Equals(c, name, StringComparison.OrdinalIgnoreCase)))
         {
             StatusText.Text = $"分类「{name}」已经存在。";
@@ -233,23 +231,6 @@ public partial class TagManagerWindow : Window
         MarkDirty();
         NewCategoryName.Clear();
         StatusText.Text = $"已新增分类「{name}」到列表，点「保存」后生效。";
-    }
-
-    private static string NormalizeCategory(string? text)
-    {
-        var value = (text ?? "").Trim();
-        return string.Equals(value, Unclassified, StringComparison.Ordinal) ? "" : value;
-    }
-
-    /// <summary>按不区分大小写找到下拉框里对应的分类项；找不到就回「未分类」。</summary>
-    private static string CategoryChoice(IEnumerable<string> choices, string? value)
-    {
-        if (!string.IsNullOrWhiteSpace(value))
-        {
-            var match = choices.FirstOrDefault(c => string.Equals(c, value, StringComparison.OrdinalIgnoreCase));
-            if (match is not null) return match;
-        }
-        return Unclassified;
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)
@@ -293,7 +274,7 @@ public partial class TagManagerWindow : Window
             foreach (var row in active)
             {
                 var name = row.NameBox.Text.Trim();
-                var category = NormalizeCategory(row.CategoryBox.SelectedItem as string);
+                var category = TagCategory.Normalize(row.CategoryBox.SelectedItem as string);
                 if (category.Length > 0) _db.EnsureCategory(category);
 
                 if (row.Original is null)

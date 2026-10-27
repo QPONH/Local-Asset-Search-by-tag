@@ -234,6 +234,19 @@ CREATE INDEX IF NOT EXISTS IX_Assets_Name ON Assets(Name);";
         if (!hasWorkId || !hasAuthors || !hasGlobalIndex) BackfillWorkMetadata(c);
     }
 
+    /// <summary>
+    /// 把“识别文件优先、目录名回退”的规则集中在一处，扫描和旧库回填共用。
+    /// </summary>
+    private static (int? Page, int? Position, string Title, string? WorkId, string? Authors, int? GlobalIndex)
+        ReadIndexFields(string name, WorkMetadata? meta)
+    {
+        var parsed = FavoriteOrder.Parse(name);
+        var page = meta?.FavoritePage ?? parsed?.Page;
+        var position = meta?.FavoritePosition ?? (meta?.FavoritePage is not null ? 0 : parsed?.Position);
+        var title = string.IsNullOrWhiteSpace(meta?.Title) ? FavoriteOrder.TitleOf(name) : meta!.Title!;
+        return (page, position, title, meta?.WorkId, meta?.AuthorsText, meta?.GlobalIndex);
+    }
+
     /// <summary>升级时按现有 Path 读一次 work-id.json，能读到的就覆盖旧的目录名解析结果。</summary>
     private static void BackfillWorkMetadata(SqliteConnection c)
     {
@@ -263,15 +276,13 @@ CREATE INDEX IF NOT EXISTS IX_Assets_Name ON Assets(Name);";
         {
             var meta = WorkMetadata.TryRead(path);
             if (meta is null) continue;
-            var parsed = FavoriteOrder.Parse(name);
-            var favPage = meta.FavoritePage ?? parsed?.Page;
-            var favPos = meta.FavoritePosition ?? (meta.FavoritePage is not null ? 0 : parsed?.Position);
-            pFp.Value = favPage.HasValue ? favPage.Value : (object)DBNull.Value;
-            pFpos.Value = favPos.HasValue ? favPos.Value : (object)DBNull.Value;
-            pSt.Value = string.IsNullOrWhiteSpace(meta.Title) ? FavoriteOrder.TitleOf(name) : meta.Title!;
-            pWid.Value = (object?)meta.WorkId ?? DBNull.Value;
-            pAuthors.Value = (object?)meta.AuthorsText ?? DBNull.Value;
-            pGi.Value = meta.GlobalIndex is int gi ? (object)gi : DBNull.Value;
+            var (page, position, title, workId, authors, globalIndex) = ReadIndexFields(name, meta);
+            pFp.Value = page.HasValue ? page.Value : (object)DBNull.Value;
+            pFpos.Value = position.HasValue ? position.Value : (object)DBNull.Value;
+            pSt.Value = title;
+            pWid.Value = (object?)workId ?? DBNull.Value;
+            pAuthors.Value = (object?)authors ?? DBNull.Value;
+            pGi.Value = globalIndex is int gi ? (object)gi : DBNull.Value;
             pId.Value = id;
             up.ExecuteNonQuery();
         }
@@ -388,10 +399,7 @@ CREATE INDEX IF NOT EXISTS IX_Assets_Name ON Assets(Name);";
             var name = Path.GetFileName(path);
             // 优先用 work-id.json 的识别信息；没有或损坏时回退到目录名末尾的 {页数,位置}。
             var meta = kind == "folder" ? WorkMetadata.TryRead(path) : null;
-            var parsed = FavoriteOrder.Parse(name);
-            var favPage = meta?.FavoritePage ?? parsed?.Page;
-            var favPos = meta?.FavoritePosition ?? (meta?.FavoritePage is not null ? 0 : parsed?.Position);
-            var sortTitle = string.IsNullOrWhiteSpace(meta?.Title) ? FavoriteOrder.TitleOf(name) : meta!.Title!;
+            var (favPage, favPos, sortTitle, workId, authors, globalIndex) = ReadIndexFields(name, meta);
             using var cmd = c.CreateCommand(); cmd.Transaction=tx;
             cmd.CommandText=@"INSERT INTO Assets(Path,ParentPath,Name,Kind,Size,ModifiedUtc,ExistsNow,FavPage,FavPos,SortTitle,WorkId,Authors,GlobalIndex)
 VALUES($p,$parent,$name,$kind,$size,$modified,1,$favPage,$favPos,$sortTitle,$workId,$authors,$globalIndex)
@@ -400,9 +408,9 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
             cmd.Parameters.Add("$favPage", SqliteType.Integer).Value = favPage.HasValue ? favPage.Value : (object)DBNull.Value;
             cmd.Parameters.Add("$favPos", SqliteType.Integer).Value = favPos.HasValue ? favPos.Value : (object)DBNull.Value;
             cmd.Parameters.AddWithValue("$sortTitle", sortTitle);
-            cmd.Parameters.AddWithValue("$workId", (object?)meta?.WorkId ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$authors", (object?)meta?.AuthorsText ?? DBNull.Value);
-            cmd.Parameters.Add("$globalIndex", SqliteType.Integer).Value = meta?.GlobalIndex is int gi ? (object)gi : DBNull.Value;
+            cmd.Parameters.AddWithValue("$workId", (object?)workId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$authors", (object?)authors ?? DBNull.Value);
+            cmd.Parameters.Add("$globalIndex", SqliteType.Integer).Value = globalIndex is int gi ? (object)gi : DBNull.Value;
             cmd.ExecuteNonQuery();
         }
         var stack = new Stack<string>(); stack.Push(root.TrimEnd(Path.DirectorySeparatorChar)); int folderCount=0;

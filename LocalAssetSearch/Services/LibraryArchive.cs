@@ -54,6 +54,9 @@ public static class LibraryArchive
         public int? FavPage { get; set; }
         public int? FavPos { get; set; }
         public string? SortTitle { get; set; }
+        public string? WorkId { get; set; }
+        public string? Authors { get; set; }
+        public int? GlobalIndex { get; set; }
         public List<TagRef> Tags { get; set; } = new();
     }
 
@@ -124,7 +127,7 @@ public static class LibraryArchive
 
         using (var q = c.CreateCommand())
         {
-            q.CommandText = @"SELECT Id, Path, ParentPath, Name, FavPage, FavPos, SortTitle
+            q.CommandText = @"SELECT Id, Path, ParentPath, Name, FavPage, FavPos, SortTitle, WorkId, Authors, GlobalIndex
                               FROM Assets WHERE Kind='folder' ORDER BY Path";
             using var r = q.ExecuteReader();
             while (r.Read())
@@ -138,6 +141,9 @@ public static class LibraryArchive
                 if (!r.IsDBNull(4)) folder.FavPage = r.GetInt32(4);
                 if (!r.IsDBNull(5)) folder.FavPos = r.GetInt32(5);
                 if (!r.IsDBNull(6)) folder.SortTitle = r.GetString(6);
+                if (!r.IsDBNull(7)) folder.WorkId = r.GetString(7);
+                if (!r.IsDBNull(8)) folder.Authors = r.GetString(8);
+                if (!r.IsDBNull(9)) folder.GlobalIndex = r.GetInt32(9);
                 if (tagsByAsset.TryGetValue(r.GetInt64(0), out var tags)) folder.Tags = tags;
                 doc.Folders.Add(folder);
             }
@@ -299,8 +305,8 @@ public static class LibraryArchive
             {
                 using var ins = c.CreateCommand();
                 ins.Transaction = tx;
-                ins.CommandText = @"INSERT INTO Assets(Path,ParentPath,Name,Kind,Size,ModifiedUtc,ExistsNow,FavPage,FavPos,SortTitle)
-                                    VALUES($p,$pp,$n,'folder',0,$m,$e,$fp,$fpos,$st)";
+                ins.CommandText = @"INSERT INTO Assets(Path,ParentPath,Name,Kind,Size,ModifiedUtc,ExistsNow,FavPage,FavPos,SortTitle,WorkId,Authors,GlobalIndex)
+                                    VALUES($p,$pp,$n,'folder',0,$m,$e,$fp,$fpos,$st,$wid,$authors,$gi)";
                 ins.Parameters.AddWithValue("$p", path);
                 ins.Parameters.AddWithValue("$pp", parent);
                 ins.Parameters.AddWithValue("$n", name);
@@ -309,6 +315,9 @@ public static class LibraryArchive
                 ins.Parameters.AddWithValue("$fp", (object?)f.FavPage ?? DBNull.Value);
                 ins.Parameters.AddWithValue("$fpos", (object?)f.FavPos ?? DBNull.Value);
                 ins.Parameters.AddWithValue("$st", (object?)f.SortTitle ?? DBNull.Value);
+                ins.Parameters.AddWithValue("$wid", (object?)f.WorkId ?? DBNull.Value);
+                ins.Parameters.AddWithValue("$authors", (object?)f.Authors ?? DBNull.Value);
+                ins.Parameters.AddWithValue("$gi", (object?)f.GlobalIndex ?? DBNull.Value);
                 ins.ExecuteNonQuery();
 
                 using var sel = c.CreateCommand();
@@ -323,7 +332,10 @@ public static class LibraryArchive
                 up.Transaction = tx;
                 up.CommandText = @"UPDATE Assets
                                    SET ParentPath=$pp, Name=$n, ExistsNow=$e,
-                                       FavPage=$fp, FavPos=$fpos, SortTitle=$st, ModifiedUtc=$m
+                                       FavPage=$fp, FavPos=$fpos, SortTitle=$st, ModifiedUtc=$m,
+                                       WorkId=COALESCE($wid,WorkId),
+                                       Authors=COALESCE($authors,Authors),
+                                       GlobalIndex=COALESCE($gi,GlobalIndex)
                                    WHERE Id=$id";
                 up.Parameters.AddWithValue("$pp", parent);
                 up.Parameters.AddWithValue("$n", name);
@@ -331,6 +343,9 @@ public static class LibraryArchive
                 up.Parameters.AddWithValue("$fp", (object?)f.FavPage ?? DBNull.Value);
                 up.Parameters.AddWithValue("$fpos", (object?)f.FavPos ?? DBNull.Value);
                 up.Parameters.AddWithValue("$st", (object?)f.SortTitle ?? DBNull.Value);
+                up.Parameters.AddWithValue("$wid", (object?)f.WorkId ?? DBNull.Value);
+                up.Parameters.AddWithValue("$authors", (object?)f.Authors ?? DBNull.Value);
+                up.Parameters.AddWithValue("$gi", (object?)f.GlobalIndex ?? DBNull.Value);
                 up.Parameters.AddWithValue("$m", modified);
                 up.Parameters.AddWithValue("$id", assetId);
                 up.ExecuteNonQuery();

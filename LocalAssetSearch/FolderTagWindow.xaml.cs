@@ -45,21 +45,11 @@ public partial class FolderTagWindow : Window
 
     private void LoadCategories()
     {
-        var choices = new List<string> { "未分类" };
+        var choices = new List<string> { TagCategory.Unclassified };
         choices.AddRange(_db.GetCategories());
         var current = NewTagCategory.SelectedItem as string;
         NewTagCategory.ItemsSource = choices;
-        NewTagCategory.SelectedItem = CategoryChoice(choices, current);
-    }
-
-    private static string CategoryChoice(IEnumerable<string> choices, string? value)
-    {
-        if (!string.IsNullOrWhiteSpace(value))
-        {
-            var match = choices.FirstOrDefault(c => string.Equals(c, value, StringComparison.OrdinalIgnoreCase));
-            if (match is not null) return match;
-        }
-        return "未分类";
+        NewTagCategory.SelectedItem = TagCategory.Choice(choices, current);
     }
 
     private void BuildFolderList()
@@ -204,7 +194,7 @@ public partial class FolderTagWindow : Window
         if (selected.Count == 0) { StatusText.Text = "请先在左侧勾选文件夹。"; return; }
         try
         {
-            var category = NormalizeCategory(NewTagCategory.SelectedItem as string);
+            var category = TagCategory.Normalize(NewTagCategory.SelectedItem as string);
             _db.EnsureTag(name, category.Length == 0 ? null : category);
             foreach (var f in selected) _db.ApplyTag(f.Id, name);
         }
@@ -217,12 +207,6 @@ public partial class FolderTagWindow : Window
         ReloadFolderTags();
         RefreshTagStates();
         StatusText.Text = $"已把「{name}」加到 {selected.Count} 个文件夹。";
-    }
-
-    private static string NormalizeCategory(string? text)
-    {
-        var value = (text ?? "").Trim();
-        return string.Equals(value, "未分类", StringComparison.Ordinal) ? "" : value;
     }
 
     private void FolderFilter_TextChanged(object sender, TextChangedEventArgs e)

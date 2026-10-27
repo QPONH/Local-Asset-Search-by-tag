@@ -514,6 +514,57 @@ public partial class App : Application
                 StartupLog.Write($"自检 空格末页关闭: 失败 -> {ex.GetType().Name}: {ex.Message}");
             }
 
+            // 滚轮模式：切到缩放，模拟滚轮，确认比例变大；切回翻页后复位。
+            try
+            {
+                var w = new ImageViewerWindow(pics)
+                {
+                    WindowState = WindowState.Normal,
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    ShowActivated = false,
+                    ShowInTaskbar = false,
+                    Left = -20000,
+                    Top = -20000,
+                    Width = 480,
+                    Height = 360,
+                };
+                try
+                {
+                    w.Show();
+                    await Task.Delay(300);
+                    w.WheelBox.SelectedIndex = 1;
+                    if (!w.WheelZoomModeForTest) throw new InvalidOperationException("滚轮没有切到缩放模式");
+
+                    var wheel = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, 120)
+                    {
+                        RoutedEvent = UIElement.MouseWheelEvent,
+                    };
+                    w.Viewport.RaiseEvent(wheel);
+                    await Task.Delay(50);
+                    StartupLog.Write($"自检 滚轮缩放: scale={w.ZoomScaleForTest:0.00}");
+                    if (w.ZoomScaleForTest <= 1.01) throw new InvalidOperationException("滚轮放大没有生效");
+
+                    // 已有 offset 时（放大后再缩小）锚点必须仍然在同一屏幕位置。
+                    var oldOffset = new Point(-80, -40);
+                    var cursorLocal = new Point(300, 200);
+                    var newOffset = ImageViewerWindow.ZoomOffsetAfter(cursorLocal, oldOffset, 2.0, 1.5);
+                    var screenX = (cursorLocal.X - oldOffset.X) / 2.0 * 1.5 + newOffset.X;
+                    var screenY = (cursorLocal.Y - oldOffset.Y) / 2.0 * 1.5 + newOffset.Y;
+                    if (Math.Abs(screenX - cursorLocal.X) > 0.001 || Math.Abs(screenY - cursorLocal.Y) > 0.001)
+                        throw new InvalidOperationException($"有平移量时缩小锚点漂移：{screenX:0.###},{screenY:0.###}");
+
+                    w.WheelBox.SelectedIndex = 0;
+                    if (w.ZoomScaleForTest > 1.001) throw new InvalidOperationException("切回翻页后缩放没有复位");
+                    StartupLog.Write("自检 滚轮翻页/缩放切换: 通过");
+                }
+                finally { if (w.IsVisible) w.Close(); }
+            }
+            catch (Exception ex)
+            {
+                failures++;
+                StartupLog.Write($"自检 滚轮翻页/缩放切换: 失败 -> {ex.GetType().Name}: {ex.Message}");
+            }
+
             // 三个标签窗口都必须是独立顶层窗口：不设 Owner，否则会挡住主窗口，翻页按钮点不到。
             Try("TagManagerWindow", () =>
             {

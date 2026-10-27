@@ -515,16 +515,25 @@ public partial class MainWindow : Window
 
     // ---------- 标签操作 ----------
 
-    private void ManageTags_Click(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// 标签窗口统一走这里：独立显示（不设 Owner、不用 ShowDialog，避免挡住翻页），
+    /// 关闭时如果改过内容，就刷新当前页并保持滚动位置。
+    /// </summary>
+    private void ShowTagWindow(Window win, Func<bool> changed)
     {
-        var win = new TagManagerWindow(_db);
         win.Closed += async (_, _) =>
         {
-            if (!win.Changed || !IsLoaded) return;
+            if (!changed() || !IsLoaded) return;
             LoadTags();
             await SearchAsync(resetScroll: false);
         };
         win.Show();
+    }
+
+    private void ManageTags_Click(object sender, RoutedEventArgs e)
+    {
+        var win = new TagManagerWindow(_db);
+        ShowTagWindow(win, () => win.Changed);
     }
 
     /// <summary>给单个素材打标签：独立窗口，关掉后刷新当前页并保持滚动位置。</summary>
@@ -536,20 +545,11 @@ public partial class MainWindow : Window
         TagOne(target);
     }
 
-    /// <summary>
-    /// 打开标签选择窗口。刻意不设 Owner、也不用 ShowDialog：
-    /// 否则它会挡住主窗口，主窗口的翻页按钮和看图窗口都点不到。
-    /// </summary>
+    /// <summary>打开标签选择窗口；刻意不设 Owner、也不用 ShowDialog，避免挡住主窗口的翻页。</summary>
     private void TagOne(AssetItem item)
     {
         var win = new TagPickerWindow(_db, new List<AssetItem> { item });
-        win.Closed += async (_, _) =>
-        {
-            if (!win.Changed || !IsLoaded) return;
-            LoadTags();
-            await SearchAsync(resetScroll: false);
-        };
-        win.Show();
+        ShowTagWindow(win, () => win.Changed);
     }
 
     private void FolderTags_Click(object sender, RoutedEventArgs e)
@@ -557,13 +557,7 @@ public partial class MainWindow : Window
         var folders = _db.GetFolders();
         if (folders.Count == 0) { System.Windows.MessageBox.Show("请先扫描一个目录。", "没有已索引目录"); return; }
         var win = new FolderTagWindow(_db, folders);
-        win.Closed += async (_, _) =>
-        {
-            if (!win.Changed || !IsLoaded) return;
-            LoadTags();
-            await SearchAsync(resetScroll: false);
-        };
-        win.Show();
+        ShowTagWindow(win, () => win.Changed);
     }
 
     private void RefreshTags_Click(object sender, RoutedEventArgs e) => LoadTags();
