@@ -44,7 +44,7 @@
        <Button Content="下一页 ›" Padding="8,3" Click="NextPage_Click"/>
        <Button Content="末页 »" Padding="8,3" Click="LastPage_Click"/>
        <TextBlock Text="每页" VerticalAlignment="Center" Margin="12,0,4,0" Foreground="{DynamicResource Brush.Muted}"/>
-       <ComboBox x:Name="PageSizeBox" Width="72" SelectedIndex="1" SelectionChanged="PageSize_Changed"><ComboBoxItem Content="30"/><ComboBoxItem Content="60"/><ComboBoxItem Content="120"/><ComboBoxItem Content="240"/></ComboBox>
+       <ComboBox x:Name="PageSizeBox" Width="82" SelectedIndex="1" SelectionChanged="PageSize_Changed"><ComboBoxItem Content="20"/><ComboBoxItem Content="40"/><ComboBoxItem Content="80"/><ComboBoxItem Content="200"/><ComboBoxItem Content="全部"/></ComboBox>
        <TextBlock Text="跳至" VerticalAlignment="Center" Margin="12,0,4,0" Foreground="{DynamicResource Brush.Muted}"/>
        <TextBox x:Name="JumpBox" Width="54" VerticalContentAlignment="Center" KeyDown="JumpBox_KeyDown"/>
        <Button Content="跳转" Padding="8,3" Click="Jump_Click"/>

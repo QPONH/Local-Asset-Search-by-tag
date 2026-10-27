@@ -63,6 +63,8 @@ public partial class ImageViewerWindow : Window
     public ImageViewerWindow(string folderPath)
     {
         InitializeComponent();
+        WindowSizeStore.Restore(this, "viewer");
+        WindowSizeStore.Track(this, "viewer");
 
         var name = Path.GetFileName(folderPath.TrimEnd(Path.DirectorySeparatorChar));
         Title = string.IsNullOrEmpty(name) ? "看图" : $"{name} — 看图";

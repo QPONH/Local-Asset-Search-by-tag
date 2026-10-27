@@ -26,7 +26,8 @@ public partial class TagPickerWindow : Window
 
     private sealed class TagGroup
     {
-        public TextBlock Header = null!;
+        public Grid Header = null!;
+        public TextBlock HeaderText = null!;
         public WrapPanel Panel = null!;
         public List<(CheckBox Box, string Name)> Items { get; } = new();
     }
@@ -36,6 +37,8 @@ public partial class TagPickerWindow : Window
         _db = db;
         _targets = targets;
         InitializeComponent();
+        WindowSizeStore.Restore(this, "tagPicker");
+        WindowSizeStore.Track(this, "tagPicker");
 
         HeaderText.Text = targets.Count == 1
             ? $"给「{targets[0].Name}」添加或移除标签。勾选即生效，无需另外保存。"
@@ -89,19 +92,13 @@ public partial class TagPickerWindow : Window
             if (!string.Equals(tag.CategoryLabel, currentCategory, StringComparison.OrdinalIgnoreCase))
             {
                 currentCategory = tag.CategoryLabel;
-                var header = new TextBlock
-                {
-                    Text = currentCategory,
-                    FontWeight = FontWeights.SemiBold,
-                    Foreground = ThemeManager.MutedBrush,
-                    Margin = new Thickness(2, 6, 2, 2),
-                };
-                TagPanel.Children.Add(header);
+                var header = TagHeader.Create(currentCategory);
+                TagPanel.Children.Add(header.Root);
 
                 // 一般标签最多四个字，排得密一点：窗口宽度下能放六列。
                 var wrap = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = 110 };
                 TagPanel.Children.Add(wrap);
-                group = new TagGroup { Header = header, Panel = wrap };
+                group = new TagGroup { Header = header.Root, HeaderText = header.Text, Panel = wrap };
                 _groups.Add(group);
             }
 
@@ -188,7 +185,7 @@ public partial class TagPickerWindow : Window
         var q = FilterBox.Text.Trim();
         foreach (var group in _groups)
         {
-            var groupMatch = q.Length == 0 || group.Header.Text.Contains(q, StringComparison.OrdinalIgnoreCase);
+            var groupMatch = q.Length == 0 || group.HeaderText.Text.Contains(q, StringComparison.OrdinalIgnoreCase);
             var visible = 0;
             foreach (var (box, name) in group.Items)
             {

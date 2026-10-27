@@ -33,7 +33,8 @@ public partial class MainWindow : Window
 
     // 分页状态。加分页不只是为了好看：原来一次性把 2000 张卡片全实例化，还会为每张都生成缩略图。
     private int _page = 1;
-    private int _pageSize = 60;
+    private int _pageSize = 40;
+    private bool _showAll;
     private int _total;
 
     private static string ThumbDir => Path.Combine(Database.DataDirectory, "Thumbnails");
@@ -43,6 +44,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         // 标题带版本号：排查「改了怎么没生效」时，一眼就能确认跑的是哪个构建。
         Title = $"本地素材搜索 v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "?"}";
+        WindowSizeStore.Restore(this, "main");
+        WindowSizeStore.Track(this, "main");
         Directory.CreateDirectory(ThumbDir);
         Results.ItemsSource = _results;
         UpdateThemeButton();
@@ -179,13 +182,7 @@ public partial class MainWindow : Window
                 if (!string.Equals(tag.CategoryLabel, currentCategory, StringComparison.OrdinalIgnoreCase))
                 {
                     currentCategory = tag.CategoryLabel;
-                    TagPanel.Children.Add(new TextBlock
-                    {
-                        Text = currentCategory,
-                        FontWeight = FontWeights.SemiBold,
-                        Foreground = ThemeManager.MutedBrush,
-                        Margin = new Thickness(2, 8, 2, 2)
-                    });
+                    TagPanel.Children.Add(TagHeader.Create(currentCategory).Root);
                     // 每个分类下面固定两列；UniformGrid 按实际可用宽度分，滚动条也不会把它挤成一列。
                     columnPanel = new UniformGrid { Columns = 2 };
                     TagPanel.Children.Add(columnPanel);
@@ -280,7 +277,7 @@ public partial class MainWindow : Window
     }
 
     private bool MatchAll => MatchBox.SelectedIndex == 0;
-    private int TotalPages => Math.Max(1, (_total + _pageSize - 1) / _pageSize);
+    private int TotalPages => _showAll ? 1 : Math.Max(1, (_total + _pageSize - 1) / _pageSize);
 
     private async void Search() => await SearchAsync();
     private Task SearchFromFirstPageAsync() { _page = 1; return SearchAsync(); }
@@ -295,8 +292,8 @@ public partial class MainWindow : Window
         var tagIds = _selectedTags.ToArray();
         var matchAll = MatchAll;
         var sort = CurrentSort;
-        var offset = (_page - 1) * _pageSize;
-        var limit = _pageSize;
+        var offset = _showAll ? 0 : (_page - 1) * _pageSize;
+        var limit = _showAll ? 100000 : _pageSize;
         var keepOffset = resetScroll ? 0 : ResultsScroll.VerticalOffset;
         try
         {
@@ -304,7 +301,7 @@ public partial class MainWindow : Window
             if (version != Volatile.Read(ref _searchVersion)) return;
 
             // 页码可能越界（例如删光了最后一页），退到最后一页重查一次。
-            if (items.Count == 0 && total > 0 && _page > 1)
+            if (!_showAll && items.Count == 0 && total > 0 && _page > 1)
             {
                 _page = Math.Max(1, (total + _pageSize - 1) / _pageSize);
                 await SearchAsync(resetScroll);
@@ -320,7 +317,7 @@ public partial class MainWindow : Window
             _results.Clear(); foreach (var item in items) _results.Add(item);
 
             ResultCount.Text = $"搜索结果（共 {_total:N0} 项）";
-            PageInfo.Text = $"第 {_page} / {TotalPages} 页";
+            PageInfo.Text = _showAll ? "全部" : $"第 {_page} / {TotalPages} 页";
             UpdateSelectionInfo();
             if (resetScroll) ScrollResultsToTop();
             else RestoreScroll(keepOffset);
@@ -341,8 +338,18 @@ public partial class MainWindow : Window
     private async void PageSize_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (_initializing || PageSizeBox?.SelectedItem is not ComboBoxItem item) return;
-        if (!int.TryParse(item.Content?.ToString(), out var size) || size <= 0) return;
-        _pageSize = size;
+        var text = item.Content?.ToString() ?? "";
+        if (string.Equals(text, "全部", StringComparison.Ordinal))
+        {
+            _showAll = true;
+            _pageSize = 100000;
+        }
+        else
+        {
+            if (!int.TryParse(text, out var size) || size <= 0) return;
+            _showAll = false;
+            _pageSize = size;
+        }
         _page = 1;
         await SearchAsync();
     }

@@ -39,6 +39,8 @@ public partial class TagManagerWindow : Window
     {
         _db = db;
         InitializeComponent();
+        WindowSizeStore.Restore(this, "tagManager");
+        WindowSizeStore.Track(this, "tagManager");
         ReloadCategories();
         BuildRows();
         Closing += OnClosing;

@@ -6,8 +6,7 @@
         MouseLeftButtonDown="Viewport_MouseLeftButtonDown"
         MouseMove="Viewport_MouseMove"
         MouseLeftButtonUp="Viewport_MouseLeftButtonUp"
-        LostMouseCapture="Viewport_LostMouseCapture"
-        ToolTip="滚轮按下方选择翻页或缩放；缩放后按住左键拖动画面">
+        LostMouseCapture="Viewport_LostMouseCapture">
    <Image x:Name="Picture" Stretch="Uniform" Margin="8" RenderOptions.BitmapScalingMode="HighQuality" RenderTransformOrigin="0,0">
     <Image.RenderTransform>
      <TransformGroup>

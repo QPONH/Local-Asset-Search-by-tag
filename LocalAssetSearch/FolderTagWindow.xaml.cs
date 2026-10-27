@@ -36,6 +36,8 @@ public partial class FolderTagWindow : Window
         _db = db;
         _folders = folders;
         InitializeComponent();
+        WindowSizeStore.Restore(this, "folderTag");
+        WindowSizeStore.Track(this, "folderTag");
         LoadCategories();
         BuildFolderList();
         ReloadTags();
@@ -85,13 +87,7 @@ public partial class FolderTagWindow : Window
             if (!string.Equals(tag.CategoryLabel, currentCategory, StringComparison.OrdinalIgnoreCase))
             {
                 currentCategory = tag.CategoryLabel;
-                TagTogglePanel.Children.Add(new TextBlock
-                {
-                    Text = currentCategory,
-                    FontWeight = FontWeights.SemiBold,
-                    Foreground = ThemeManager.MutedBrush,
-                    Margin = new Thickness(2, 6, 2, 2)
-                });
+                TagTogglePanel.Children.Add(TagHeader.Create(currentCategory).Root);
                 // 四个字的标签排三列，右侧栏不浪费横向空间。
                 columnPanel = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = 100 };
                 TagTogglePanel.Children.Add(columnPanel);
