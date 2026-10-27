@@ -6,6 +6,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Runtime.InteropServices;
@@ -27,6 +28,8 @@ public partial class MainWindow : Window
     private int _searchVersion;
     private bool _loadingTags;
     private bool _initializing = true;
+    private bool _autoRefreshOnStart;
+    private bool _scanning;
 
     // 分页状态。加分页不只是为了好看：原来一次性把 2000 张卡片全实例化，还会为每张都生成缩略图。
     private int _page = 1;
@@ -45,8 +48,36 @@ public partial class MainWindow : Window
         UpdateThemeButton();
         SortBox.SelectedIndex = ReadSavedSortIndex();
         LoadTags();
+        _autoRefreshOnStart = Settings.Get("scan.refreshOnStart", "0") == "1";
+        UpdateAutoRefreshButton();
+        Loaded += MainWindow_Loaded;
         _initializing = false;
         Search();
+    }
+
+    private void UpdateAutoRefreshButton() =>
+        AutoRefreshButton.Content = _autoRefreshOnStart ? "进入时刷新：开" : "进入时刷新：关";
+
+    private void AutoRefresh_Click(object sender, RoutedEventArgs e)
+    {
+        _autoRefreshOnStart = !_autoRefreshOnStart;
+        UpdateAutoRefreshButton();
+        Settings.Set("scan.refreshOnStart", _autoRefreshOnStart ? "1" : "0");
+        StatusText.Text = _autoRefreshOnStart
+            ? "已开启：下次打开工具会重新扫描上次选择的目录。"
+            : "已关闭进入时自动刷新。";
+    }
+
+    /// <summary>
+    /// 「进入时刷新」：用上次「添加/扫描目录」选中的目录跑一遍扫描。
+    /// 放在 Loaded 里，保证窗口和数据库都已经就绪。
+    /// </summary>
+    private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (!_autoRefreshOnStart) return;
+        var root = Settings.Get("scan.lastRoot", "");
+        if (!Directory.Exists(root)) return;
+        await ScanRootAsync(root, auto: true);
     }
 
     private static int ReadSavedSortIndex()
@@ -102,18 +133,32 @@ public partial class MainWindow : Window
     {
         var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "选择要索引的图片目录", Multiselect = false };
         if (dlg.ShowDialog(this) != true) return;
-        SetBusy(true); StatusText.Text = "正在扫描目录…";
+        Settings.Set("scan.lastRoot", dlg.FolderName);
+        await ScanRootAsync(dlg.FolderName, auto: false);
+    }
+
+    /// <summary>添加/扫描和「进入时刷新」共用；auto 时失败只写状态栏，不弹启动错误框。</summary>
+    private async Task ScanRootAsync(string root, bool auto)
+    {
+        if (_scanning) return;
+        _scanning = true;
+        SetBusy(true);
+        StatusText.Text = auto ? "正在刷新上次选择的目录…" : "正在扫描目录…";
         try
         {
-            var purged = await Task.Run(() => _db.AddRootAndScan(dlg.FolderName, s => Dispatcher.Invoke(() => StatusText.Text = s)));
+            var purged = await Task.Run(() => _db.AddRootAndScan(root, s => Dispatcher.Invoke(() => StatusText.Text = s)));
             LoadTags();
             await SearchFromFirstPageAsync();
             StatusText.Text = purged > 0
-                ? $"扫描完成，顺带清理了 {purged:N0} 个磁盘上已不存在的记录。"
-                : "扫描完成。";
+                ? $"{(auto ? "自动刷新" : "扫描")}完成，顺带清理了 {purged:N0} 个磁盘上已不存在的记录。"
+                : $"{(auto ? "自动刷新" : "扫描")}完成。";
         }
-        catch (Exception ex) { System.Windows.MessageBox.Show(ex.Message, "扫描失败", MessageBoxButton.OK, MessageBoxImage.Error); }
-        finally { SetBusy(false); }
+        catch (Exception ex)
+        {
+            StatusText.Text = auto ? $"自动刷新失败：{ex.Message}" : "扫描失败。";
+            if (!auto) System.Windows.MessageBox.Show(ex.Message, "扫描失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally { SetBusy(false); _scanning = false; }
     }
 
     /// <summary>
@@ -163,6 +208,14 @@ public partial class MainWindow : Window
                 };
                 cb.Checked += async (_, _) => { if (_loadingTags) return; _selectedTags.Add(tag.Id); await SearchFromFirstPageAsync(); };
                 cb.Unchecked += async (_, _) => { if (_loadingTags) return; _selectedTags.Remove(tag.Id); await SearchFromFirstPageAsync(); };
+
+                // 右键左侧标签也能直接编辑文字，不必打开标签管理。
+                var menu = new ContextMenu();
+                var edit = new MenuItem { Header = "编辑标签文字…", Tag = tag.Id };
+                edit.Click += RenameFilterTag_Click;
+                menu.Items.Add(edit);
+                cb.ContextMenu = menu;
+
                 columnPanel!.Children.Add(cb);
                 _tagChecks[tag.Id] = cb;
                 if (previously.Contains(tag.Id)) { _selectedTags.Add(tag.Id); cb.IsChecked = true; }
@@ -182,6 +235,48 @@ public partial class MainWindow : Window
         if (_selectedTags.Contains(id)) { await SearchFromFirstPageAsync(); return; }
         if (_tagChecks.TryGetValue(id, out var cb)) cb.IsChecked = true;   // 触发 Checked → 自行重新搜索
         else await SearchFromFirstPageAsync();
+    }
+
+    /// <summary>双击卡片上的标签芯片：编辑标签文字，不改变 TagId 和已有对应。</summary>
+    private async void TagChip_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Button b || b.Tag is not string name) return;
+        if (!_tagIdByName.TryGetValue(name, out var id))
+        {
+            LoadTags();
+            if (!_tagIdByName.TryGetValue(name, out id)) return;
+        }
+        e.Handled = true;
+        await RenameTagTextAsync(id, name);
+    }
+
+    private async void RenameFilterTag_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: long id }) return;
+        var tag = _db.GetTags().FirstOrDefault(t => t.Id == id);
+        if (tag is null) { LoadTags(); return; }
+        await RenameTagTextAsync(id, tag.Name);
+    }
+
+    private async Task RenameTagTextAsync(long tagId, string currentName)
+    {
+        var dlg = new TagRenameWindow(currentName) { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+
+        var newName = dlg.TagName.Trim();
+        if (newName.Length == 0 || string.Equals(newName, currentName, StringComparison.Ordinal)) return;
+
+        try
+        {
+            _db.RenameTag(tagId, newName);
+            LoadTags();
+            await SearchAsync(resetScroll: false);
+            StatusText.Text = $"标签文字已改为「{newName}」，已有标签对应保持不变。";
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(ex.Message, "编辑标签文字失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private bool MatchAll => MatchBox.SelectedIndex == 0;
@@ -290,7 +385,7 @@ public partial class MainWindow : Window
         var msg = $"从工具中移除 {selected.Count} 个条目？\n\n" +
                   "· 只删除本工具的索引和标签关联\n" +
                   "· 磁盘上的原始文件不会被删除\n" +
-                  "· 重新扫描目录时也不会再收进来"
+                  "· 再次扫描到这个目录时会直接重新加入，不再需要手动恢复隐藏"
                   + (hasFolder ? "\n· 其中包含文件夹，它内部已索引的项目会一并移除" : "");
         if (System.Windows.MessageBox.Show(msg, "从工具中删除", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
 
@@ -298,7 +393,7 @@ public partial class MainWindow : Window
         {
             SetBusy(true);
             var ids = selected.Select(r => r.Id).ToArray();
-            var n = await Task.Run(() => _db.RemoveFromLibrary(ids));
+            var n = await Task.Run(() => _db.RemoveFromLibrary(ids, hidePaths: false));
             StatusText.Text = $"已从工具中移除 {n} 个条目（磁盘文件未改动）。";
             LoadTags();
             await SearchAsync();
@@ -356,24 +451,6 @@ public partial class MainWindow : Window
             System.Windows.MessageBox.Show(ex.Message, "删除文件夹失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally { SetBusy(false); }
-    }
-
-    private async void RestoreHidden_Click(object sender, RoutedEventArgs e)
-    {
-        var hidden = _db.GetHiddenCount();
-        if (hidden == 0) { System.Windows.MessageBox.Show("没有被隐藏的条目。", "无需恢复"); return; }
-        if (System.Windows.MessageBox.Show(
-                $"已经隐藏了 {hidden:N0} 个条目。\n\n" +
-                "恢复后需要重新扫描目录才能把索引补回来；之前删除时一并清掉的标签无法恢复。\n\n确定恢复吗？",
-                "恢复已隐藏条目", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-
-        try
-        {
-            _db.RestoreAllHidden();
-            StatusText.Text = "已清空隐藏列表，请重新扫描目录以恢复索引。";
-            await SearchFromFirstPageAsync();
-        }
-        catch (Exception ex) { System.Windows.MessageBox.Show(ex.Message, "恢复失败", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
     // ---------- 导出清单 ----------
@@ -678,13 +755,13 @@ public partial class MainWindow : Window
                 $"从工具中移除「{item.Name}」？\n\n" +
                 "· 只删除本工具的索引和标签关联\n" +
                 "· 磁盘上的原始文件夹不会被删除\n" +
-                "· 重新扫描目录时也不会再收进来",
+                "· 再次扫描到这个目录时会直接重新加入，不再需要手动恢复隐藏",
                 "从工具中删除", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
 
         try
         {
             SetBusy(true);
-            await Task.Run(() => _db.RemoveFromLibrary(new[] { item.Id }));
+            await Task.Run(() => _db.RemoveFromLibrary(new[] { item.Id }, hidePaths: false));
             StatusText.Text = $"已从工具中移除「{item.Name}」（磁盘目录未改动）。";
             LoadTags();
             await SearchAsync();

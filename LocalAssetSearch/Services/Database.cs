@@ -232,6 +232,11 @@ CREATE INDEX IF NOT EXISTS IX_Assets_Name ON Assets(Name);";
         // 第一次升级到带识别文件的版本：把现有库里的文件夹就地补一遍，
         // 用户不用为了看到新的标题/顺序而重新扫描整个目录。
         if (!hasWorkId || !hasAuthors || !hasGlobalIndex) BackfillWorkMetadata(c);
+
+        // 列确定存在后再建索引；放到最初的建表 SQL 里会让更老的库直接报“没有 WorkId 列”。
+        using var idx = c.CreateCommand();
+        idx.CommandText = "CREATE INDEX IF NOT EXISTS IX_Assets_WorkId ON Assets(WorkId)";
+        idx.ExecuteNonQuery();
     }
 
     /// <summary>
@@ -382,7 +387,8 @@ CREATE INDEX IF NOT EXISTS IX_Assets_Name ON Assets(Name);";
         using var c = Open();
         using (var cmd = c.CreateCommand()) { cmd.CommandText="INSERT OR IGNORE INTO Roots(Path) VALUES($p)"; cmd.Parameters.AddWithValue("$p",root); cmd.ExecuteNonQuery(); }
 
-        // 用户从工具里移除过的条目，重扫时不要再收回来。
+        // 旧版本「从工具中删除」会把路径记进 HiddenPaths。现在重新扫描到它时自动取消隐藏，
+        // 不再需要用户点「恢复已隐藏」；新删除也不再写隐藏列表。
         var hidden = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using (var cmd = c.CreateCommand())
         {
@@ -412,13 +418,28 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
             cmd.Parameters.AddWithValue("$authors", (object?)authors ?? DBNull.Value);
             cmd.Parameters.Add("$globalIndex", SqliteType.Integer).Value = globalIndex is int gi ? (object)gi : DBNull.Value;
             cmd.ExecuteNonQuery();
+
+            // 文件夹改名/移动后 Path 变了，但 WorkId 不变。把旧路径记录上的标签
+            // 复制到这条记录，这样即使旧记录之后被清理，标签也还在。
+            using var idCmd = c.CreateCommand();
+            idCmd.Transaction = tx;
+            idCmd.CommandText = "SELECT Id FROM Assets WHERE Path=$p";
+            idCmd.Parameters.AddWithValue("$p", path);
+            CopyTagsByWorkId(c, tx, Convert.ToInt64(idCmd.ExecuteScalar()), workId);
         }
         var stack = new Stack<string>(); stack.Push(root.TrimEnd(Path.DirectorySeparatorChar)); int folderCount=0;
         while(stack.Count>0)
         {
             var dir=stack.Pop();
-            // 整个目录被移除过就不要再深入——否则它里面新增的子目录又会被收回来。
-            if (hidden.Contains(dir)) continue;
+            // 扫描到旧隐藏路径：自动取消隐藏并把整个目录重新收进来，包括它的子目录。
+            if (hidden.Remove(dir))
+            {
+                using var unhide = c.CreateCommand();
+                unhide.Transaction = tx;
+                unhide.CommandText = "DELETE FROM HiddenPaths WHERE Path=$p COLLATE NOCASE";
+                unhide.Parameters.AddWithValue("$p", dir);
+                unhide.ExecuteNonQuery();
+            }
             try
             {
                 var di=new DirectoryInfo(dir);
@@ -448,6 +469,7 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
         foreach (var (id, path) in stale)
         {
             try { if (Directory.Exists(path) || File.Exists(path)) continue; } catch { continue; }
+
             using var del = c.CreateCommand();
             del.Transaction = tx;
             del.CommandText = "DELETE FROM Assets WHERE Id=$id";
@@ -461,6 +483,23 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
             : $"扫描完成：{folderCount:N0} 个文件夹。");
         return purged;
     }
+    /// <summary>
+    /// 按 WorkId 把其他路径记录上的标签并到 newId。WorkId 来自 work-id.json，
+    /// 文件夹后缀数字/收藏夹位置变化时它不变，所以改名/搬目录后标签还能对上。
+    /// </summary>
+    private static void CopyTagsByWorkId(SqliteConnection c, SqliteTransaction tx, long newId, string? workId)
+    {
+        if (string.IsNullOrWhiteSpace(workId)) return;
+        using var copy = c.CreateCommand();
+        copy.Transaction = tx;
+        copy.CommandText = @"INSERT OR IGNORE INTO AssetTags(AssetId,TagId)
+                             SELECT $new, TagId FROM AssetTags
+                             WHERE AssetId IN (SELECT Id FROM Assets WHERE WorkId=$wid AND Id<>$new)";
+        copy.Parameters.AddWithValue("$new", newId);
+        copy.Parameters.AddWithValue("$wid", workId);
+        copy.ExecuteNonQuery();
+    }
+
     private static string EscapeLike(string s)=>s.Replace("\\","\\\\").Replace("%","\\%").Replace("_","\\_");
 
     // ---------- 标签 ----------

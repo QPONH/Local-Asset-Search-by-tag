@@ -5,7 +5,7 @@
    <Button Content="添加/扫描目录" Click="Scan_Click"/>
    <Button Content="标签管理" Click="ManageTags_Click" ToolTip="设置标签分类、改名、删除标签"/>
    <Button Content="管理文件夹标签" Click="FolderTags_Click"/>
-   <Button Content="恢复已隐藏" Click="RestoreHidden_Click" ToolTip="清空「从工具中删除」的记录（需重新扫描才能恢复索引）"/>
+   <Button x:Name="AutoRefreshButton" Content="进入时刷新：关" Click="AutoRefresh_Click" ToolTip="开启后，每次打开工具会重新扫描上次选择的目录；不需要再手动点扫描"/>
    <Button Content="导出清单" Click="Export_Click" ToolTip="把当前筛选出的文件夹名称导出成文本清单"/>
    <Button Content="库另存为…" Click="BackupLibrary_Click" ToolTip="把标签和文件夹列表另存为 JSON 文档；不包含图片，也不会移动磁盘文件"/>
    <Button Content="读取库…" Click="RestoreLibrary_Click" ToolTip="从 JSON 文档恢复标签和文件夹列表（合并到当前库，不清空）"/>
@@ -79,7 +79,7 @@
         </Border>
         <TextBlock Grid.Row="1" Text="{Binding ImageCountLabel}" Foreground="{DynamicResource Brush.Muted}" FontSize="11" Margin="2,4,2,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
         <ItemsControl Grid.Row="2" ItemsSource="{Binding Tags}" Margin="2,5,2,0" ClipToBounds="True"><ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel><ItemsControl.ItemTemplate><DataTemplate>
-         <Button Content="{Binding}" Tag="{Binding}" Click="TagChip_Click" Padding="5,1" Margin="0,0,3,3" FontSize="10" Foreground="{DynamicResource Brush.ChipText}" ToolTip="点此按该标签筛选"/>
+         <Button Content="{Binding}" Tag="{Binding}" Click="TagChip_Click" MouseDoubleClick="TagChip_DoubleClick" Padding="5,1" Margin="0,0,3,3" FontSize="10" Foreground="{DynamicResource Brush.ChipText}" ToolTip="单击按该标签筛选；双击编辑标签文字（不影响已有对应）"/>
         </DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
         <Border Grid.Row="3" VerticalAlignment="Bottom" Cursor="Hand" MouseLeftButtonUp="Title_Click" Tag="{Binding Path}" Background="{DynamicResource Brush.Input}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" CornerRadius="4" Padding="5,3" ToolTip="点击打开这个文件夹">
          <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="44"/>

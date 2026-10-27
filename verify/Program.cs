@@ -37,7 +37,7 @@ internal static class Program
             }
         }
 
-        var temp = Path.Combine(Path.GetTempPath(), "las-verify-" + Guid.NewGuid().ToString("N"));
+        var temp = Path.Combine(@"C:\work", "las-verify-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(temp);
         Console.WriteLine($"临时目录：{temp}");
         try
@@ -393,9 +393,13 @@ INSERT INTO AssetTags(AssetId,TagId) VALUES (1,1),(2,1),(3,1),(3,2);";
         Check(db.GetTags().First(t => t.Name == "临时").Category == "年份", "改分类生效");
 
         // ---- 改名与重名拦截 ----
+        var taggedFolder = db.GetFolders().First(f => f.Name == "作品01");
+        db.ApplyTag(taggedFolder.Id, "风景");
         var sceneryTag = db.GetTags().First(t => t.Name == "风景");
         db.RenameTag(sceneryTag.Id, "风光");
         Check(db.GetTags().Any(t => t.Name == "风光"), "标签改名生效");
+        Check(db.GetAllAssetTags().TryGetValue(taggedFolder.Id, out var renamedTags) && renamedTags.Contains("风光"),
+            "标签改名后文件夹关联不变", renamedTags is null ? "无" : string.Join("、", renamedTags));
 
         bool duplicateRejected = false;
         try { db.RenameTag(sceneryTag.Id, "人像"); } catch (InvalidOperationException) { duplicateRejected = true; }
@@ -435,7 +439,8 @@ INSERT INTO AssetTags(AssetId,TagId) VALUES (1,1),(2,1),(3,1),(3,2);";
         Check(Directory.Exists(victim.Path), "移除后磁盘目录依然存在");
 
         db.AddRootAndScan(scanRoot);
-        Check(db.Search("", Array.Empty<long>(), true).All(i => i.Path != victim.Path), "重扫后被移除的目录不会回来");
+        Check(db.Search("", Array.Empty<long>(), true).Any(i => i.Path == victim.Path), "重扫后旧隐藏目录自动回来");
+        Check(db.GetHiddenCount() == 0, "重扫自动清空隐藏记录");
 
         // ---- 移除文件夹会连带内部子目录 ----
         var folder7 = db.GetFolders().First(f => f.Name == "作品07");
@@ -529,6 +534,53 @@ INSERT INTO AssetTags(AssetId,TagId) VALUES (1,1),(2,1),(3,1),(3,2);";
         Check(db.Search("愛上陸", Array.Empty<long>(), true).Any(i => i.Path == metaDir), "可按作者搜索");
         var order = db.Search("", Array.Empty<long>(), true, SortMode.GlobalIndex);
         Check(order.First().Path == metaDir, "GlobalIndex 排序", string.Join(" | ", order.Select(i => i.Name)));
+
+        // 批量工具改了文件夹后缀和 work-id 的收藏夹位置后，旧路径消失。
+        // 重扫时旧记录会被清理，标签必须按不变的 WorkId 迁到新路径。
+        var oldItem = db.Search("濁音", Array.Empty<long>(), true).First(i => i.Path == metaDir);
+        var tagId = db.EnsureTag("重命名保留");
+        db.ApplyTag(oldItem.Id, "重命名保留");
+
+        var renamed = Path.Combine(scan, "濁音 6{50on!}{愛上陸}{999}");
+        Directory.Move(metaDir, renamed);
+        File.WriteAllText(Path.Combine(renamed, "work-id.json"), """
+            {
+              "SchemaVersion": 1,
+              "WorkId": "112462",
+              "Title": "濁音 6",
+              "Authors": ["50on!", "愛上陸"],
+              "FavoritePage": 21,
+              "FavoritePosition": 3,
+              "GlobalIndex": 388,
+              "ImageCount": 21
+            }
+            """);
+        db.AddRootAndScan(scan);
+
+        var tagged = db.Search("", new[] { tagId }, true);
+        Check(tagged.Any(i => i.Path == renamed), "文件夹改名后标签按 WorkId 保留", string.Join(" | ", tagged.Select(i => i.Path)));
+        Check(tagged.All(i => i.Path != metaDir), "旧路径记录已清理", string.Join(" | ", tagged.Select(i => i.Path)));
+
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText = "SELECT FavPage,FavPos,WorkId FROM Assets WHERE Path=$p";
+            cmd.Parameters.AddWithValue("$p", renamed);
+            using var r = cmd.ExecuteReader();
+            if (r.Read())
+            {
+                Check(r.GetInt32(0) == 21 && r.GetInt32(1) == 3, "修改收藏夹位置后重扫更新", $"{r.GetInt32(0)},{r.GetInt32(1)}");
+                Check(r.GetString(2) == "112462", "新路径仍保存 WorkId", r.GetString(2));
+            }
+            else Check(false, "改名后的文件夹已重新索引", "没有找到新路径");
+        }
+
+        // 旧版本「从工具中删除」会写 HiddenPaths 并挡住重扫；现在重扫到它要自动取消隐藏。
+        var renamedItem = db.Search("濁音", Array.Empty<long>(), true).First(i => i.Path == renamed);
+        db.RemoveFromLibrary(new[] { renamedItem.Id }, hidePaths: true);
+        Check(db.GetHiddenCount() > 0, "旧版删除写入隐藏记录");
+        db.AddRootAndScan(scan);
+        Check(db.Search("濁音", Array.Empty<long>(), true).Any(i => i.Path == renamed), "扫描到旧隐藏路径会自动重新加入");
+        Check(db.GetHiddenCount() == 0, "扫描到后隐藏记录自动清空");
     }
 
     /// <summary>库备份：标签 + 文件夹列表另存为 JSON，再读取回一个空库。</summary>
