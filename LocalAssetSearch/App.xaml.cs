@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Media3D;
 using LocalAssetSearch.Models;
 using LocalAssetSearch.Services;
 
@@ -31,6 +32,8 @@ public partial class App : Application
         };
 
         base.OnStartup(e);
+
+        RegisterGlobalInputBehavior();
 
         // 主题要在建窗口之前定下来，否则会先闪一下浅色。
         ThemeManager.LoadPreference();
@@ -67,6 +70,49 @@ public partial class App : Application
             Report(ex, "启动失败");
             Shutdown(1);
         }
+    }
+
+    /// <summary>
+    /// 下拉框的选项不允许用方向键改；点击输入框以外的空白处时，
+    /// 取消文字选中并让输入框失焦（文本内容保留，绑定/TextChanged 会保存）。
+    /// </summary>
+    private static void RegisterGlobalInputBehavior()
+    {
+        EventManager.RegisterClassHandler(typeof(ComboBox), Keyboard.PreviewKeyDownEvent,
+            new KeyEventHandler(ComboBox_PreviewKeyDown));
+        EventManager.RegisterClassHandler(typeof(Window), Mouse.PreviewMouseDownEvent,
+            new MouseButtonEventHandler(Window_PreviewMouseDown));
+    }
+
+    private static void ComboBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not ComboBox combo) return;
+        var blocked = e.Key is Key.Up or Key.Down ||
+                      (!combo.IsEditable && (e.Key is Key.Left or Key.Right));
+        if (blocked) e.Handled = true;
+    }
+
+    private static void Window_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject source) return;
+        if (FindAncestor<TextBoxBase>(source) is not null) return;
+        if (Keyboard.FocusedElement is not TextBox textBox) return;
+
+        textBox.Select(0, 0);
+        textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        Keyboard.ClearFocus();
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? source) where T : DependencyObject
+    {
+        while (source is not null)
+        {
+            if (source is T match) return match;
+            source = source is Visual or Visual3D
+                ? VisualTreeHelper.GetParent(source)
+                : LogicalTreeHelper.GetParent(source);
+        }
+        return null;
     }
 
     /// <summary>
@@ -365,39 +411,35 @@ public partial class App : Application
                 finally { a.Close(); b.Close(); }
             });
 
-            // 自动翻页：预设间隔对不对，以及**默认必须是关着的**
-            //（否则一打开就自己翻页、跑到最后一页自己关掉，等于没法看图）。
-            Try("自动翻页预设与默认状态", () =>
+            // 自动翻页默认必须关着，否则一打开就自己翻页、跑到最后一页自己关掉。
+            Try("自动翻页默认状态", () =>
             {
-                var expect = new (int Idx, int Sec)[] { (1, 2), (2, 3), (3, 5), (4, 10) };
-                foreach (var (idx, sec) in expect)
-                    if (ImageViewerWindow.PresetSeconds(idx) != sec)
-                        throw new InvalidOperationException($"预设 {idx} 应该是 {sec} 秒，实际 {ImageViewerWindow.PresetSeconds(idx)}");
-
                 var w = new ImageViewerWindow(pics);
                 try
                 {
-                    StartupLog.Write($"自检 自动翻页预设: 共 {w.IntervalBox.Items.Count} 项，默认选中索引 {w.IntervalBox.SelectedIndex}");
-                    if (w.IntervalBox.Items.Count != 5) throw new InvalidOperationException($"预设应该是 5 项，实际 {w.IntervalBox.Items.Count}");
-                    if (w.IntervalBox.SelectedIndex != 0) throw new InvalidOperationException("自动翻页默认必须是「不自动翻页」");
+                    if (w.AutoPageCheck.IsChecked == true) throw new InvalidOperationException("自动翻页默认必须关闭");
+                    if (w.AutoPageEnabled) throw new InvalidOperationException("自动翻页默认不能启动计时器");
+                    if (string.IsNullOrWhiteSpace(w.IntervalBox.Text)) throw new InvalidOperationException("间隔输入框没有默认值");
+                    StartupLog.Write($"自检 自动翻页默认: interval={w.IntervalBox.Text}s");
                 }
                 finally { w.Close(); }
             });
 
-            // 预设不只是下拉框里的文字：选中后必须真的启动计时器，选回「不自动」必须停。
-            Try("自动翻页预设会启动 / 停止计时器", () =>
+            // 数字间隔：输入 2.5 秒后打开开关必须真的按 2.5 秒启动，关闭必须停。
+            Try("自动翻页数字间隔启动 / 停止", () =>
             {
                 var w = new ImageViewerWindow(pics);
                 try
                 {
                     if (w.Icon is null) throw new InvalidOperationException("看图窗口没有应用图标");
-                    w.IntervalBox.SelectedIndex = 1;
-                    StartupLog.Write($"自检 选中预设 1: enabled={w.AutoPageEnabled} interval={w.AutoPageInterval.TotalSeconds}s");
-                    if (!w.AutoPageEnabled) throw new InvalidOperationException("选中「每 2 秒」后计时器没有启动");
-                    if (Math.Abs(w.AutoPageInterval.TotalSeconds - 2) > 0.01)
-                        throw new InvalidOperationException($"间隔应该是 2 秒，实际 {w.AutoPageInterval.TotalSeconds}");
-                    w.IntervalBox.SelectedIndex = 0;
-                    if (w.AutoPageEnabled) throw new InvalidOperationException("选回「不自动翻页」后计时器没有停止");
+                    w.IntervalBox.Text = "2.5";
+                    w.AutoPageCheck.IsChecked = true;
+                    StartupLog.Write($"自检 自动翻页 2.5 秒: enabled={w.AutoPageEnabled} interval={w.AutoPageInterval.TotalSeconds}s");
+                    if (!w.AutoPageEnabled) throw new InvalidOperationException("打开自动翻页后计时器没有启动");
+                    if (Math.Abs(w.AutoPageInterval.TotalSeconds - 2.5) > 0.01)
+                        throw new InvalidOperationException($"间隔应该是 2.5 秒，实际 {w.AutoPageInterval.TotalSeconds}");
+                    w.AutoPageCheck.IsChecked = false;
+                    if (w.AutoPageEnabled) throw new InvalidOperationException("关闭自动翻页后计时器没有停止");
                 }
                 finally { w.Close(); }
             });
@@ -553,9 +595,21 @@ public partial class App : Application
                     if (Math.Abs(screenX - cursorLocal.X) > 0.001 || Math.Abs(screenY - cursorLocal.Y) > 0.001)
                         throw new InvalidOperationException($"有平移量时缩小锚点漂移：{screenX:0.###},{screenY:0.###}");
 
+                    w.WheelBox.SelectedIndex = 2;
+                    var beforeInterval = w.AutoPageSecondsForTest;
+                    var intervalWheel = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, -120)
+                    {
+                        RoutedEvent = UIElement.MouseWheelEvent,
+                    };
+                    w.Viewport.RaiseEvent(intervalWheel);
+                    await Task.Delay(50);
+                    StartupLog.Write($"自检 滚轮调速: {beforeInterval:0.0}s -> {w.AutoPageSecondsForTest:0.0}s");
+                    if (Math.Abs(w.AutoPageSecondsForTest - beforeInterval - 0.1) > 0.001)
+                        throw new InvalidOperationException("滚轮向下没有把自动翻页间隔增加 0.1 秒");
+
                     w.WheelBox.SelectedIndex = 0;
                     if (w.ZoomScaleForTest > 1.001) throw new InvalidOperationException("切回翻页后缩放没有复位");
-                    StartupLog.Write("自检 滚轮翻页/缩放切换: 通过");
+                    StartupLog.Write("自检 滚轮翻页/缩放/调速切换: 通过");
                 }
                 finally { if (w.IsVisible) w.Close(); }
             }
@@ -563,6 +617,47 @@ public partial class App : Application
             {
                 failures++;
                 StartupLog.Write($"自检 滚轮翻页/缩放切换: 失败 -> {ex.GetType().Name}: {ex.Message}");
+            }
+
+            // 双页显示：左右两页都在，步长可在「翻一张 / 翻两张」之间切换。
+            try
+            {
+                var w = new ImageViewerWindow(pics)
+                {
+                    WindowState = WindowState.Normal,
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    ShowActivated = false,
+                    ShowInTaskbar = false,
+                    Left = -20000,
+                    Top = -20000,
+                    Width = 640,
+                    Height = 420,
+                };
+                try
+                {
+                    w.Show();
+                    await Task.Delay(300);
+                    w.DoublePageCheck.IsChecked = true;
+                    await Task.Delay(300);
+                    if (!w.DoublePageForTest) throw new InvalidOperationException("双页开关没有打开");
+                    if (w.PictureRight.Source is null) throw new InvalidOperationException("双页右侧没有加载第二张图");
+                    if (w.PictureRight.Visibility != Visibility.Visible) throw new InvalidOperationException("双页右侧图片没有显示");
+                    w.DoubleStepBox.SelectedIndex = 0;
+                    if (w.DoubleStepForTest != 1) throw new InvalidOperationException("双页步长没有切到翻一张");
+                    w.DoubleStepBox.SelectedIndex = 1;
+                    if (w.DoubleStepForTest != 2) throw new InvalidOperationException("双页步长没有切到翻两张");
+                    w.DoublePageCheck.IsChecked = false;
+                    await Task.Delay(200);
+                    if (w.DoublePageForTest || w.PictureRight.Visibility != Visibility.Collapsed)
+                        throw new InvalidOperationException("关闭双页后右侧没有收起");
+                    StartupLog.Write("自检 双页显示/步长: 通过");
+                }
+                finally { if (w.IsVisible) w.Close(); }
+            }
+            catch (Exception ex)
+            {
+                failures++;
+                StartupLog.Write($"自检 双页显示/步长: 失败 -> {ex.GetType().Name}: {ex.Message}");
             }
 
             // 三个标签窗口都必须是独立顶层窗口：不设 Owner，否则会挡住主窗口，翻页按钮点不到。

@@ -7,7 +7,8 @@
         MouseMove="Viewport_MouseMove"
         MouseLeftButtonUp="Viewport_MouseLeftButtonUp"
         LostMouseCapture="Viewport_LostMouseCapture">
-   <Image x:Name="Picture" Stretch="Uniform" Margin="8" RenderOptions.BitmapScalingMode="HighQuality" RenderTransformOrigin="0,0">
+   <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+   <Image x:Name="Picture" Grid.Column="0" Grid.ColumnSpan="2" Stretch="Uniform" Margin="8" RenderOptions.BitmapScalingMode="HighQuality" RenderTransformOrigin="0,0">
     <Image.RenderTransform>
      <TransformGroup>
       <ScaleTransform x:Name="PictureScale" ScaleX="1" ScaleY="1"/>
@@ -15,13 +16,25 @@
      </TransformGroup>
     </Image.RenderTransform>
    </Image>
+   <Image x:Name="PictureRight" Grid.Column="1" Visibility="Collapsed" Stretch="Uniform" Margin="8" RenderOptions.BitmapScalingMode="HighQuality" RenderTransformOrigin="0,0">
+    <Image.RenderTransform>
+     <TransformGroup>
+      <ScaleTransform x:Name="PictureRightScale" ScaleX="1" ScaleY="1"/>
+      <TranslateTransform x:Name="PictureRightTranslate"/>
+     </TransformGroup>
+    </Image.RenderTransform>
+   </Image>
   </Grid>
   <DockPanel Grid.Row="1" Margin="12,4,12,12">
    <TextBlock x:Name="InfoText" DockPanel.Dock="Left" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Muted}" TextTrimming="CharacterEllipsis"/>
    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-    <TextBlock Text="点击任意处 / ← → / 空格 翻页（末页关闭）　A 自动翻页　Ctrl+W / Esc 关闭" VerticalAlignment="Center" Margin="0,0,14,0" FontSize="11" Foreground="{DynamicResource Brush.Muted}"/>
-    <ComboBox x:Name="WheelBox" Width="98" VerticalAlignment="Center" SelectedIndex="0" SelectionChanged="Wheel_Changed" ToolTip="鼠标滚轮：翻页或缩放。缩放下按住左键拖动画面。"><ComboBoxItem Content="滚轮翻页"/><ComboBoxItem Content="滚轮缩放"/></ComboBox>
-    <ComboBox x:Name="IntervalBox" Width="124" VerticalAlignment="Center" SelectedIndex="0" SelectionChanged="Interval_Changed" ToolTip="自动翻页间隔。最后一页会等满一个间隔后自动关闭，点任意处也会关闭。"><ComboBoxItem Content="不自动翻页"/><ComboBoxItem Content="每 2 秒"/><ComboBoxItem Content="每 3 秒"/><ComboBoxItem Content="每 5 秒"/><ComboBoxItem Content="每 10 秒"/></ComboBox>
+    <TextBlock Text="点击 / 方向键 / 空格 翻页（末页关闭）　A 自动　Ctrl+W 关闭" VerticalAlignment="Center" Margin="0,0,10,0" FontSize="11" Foreground="{DynamicResource Brush.Muted}"/>
+    <ComboBox x:Name="WheelBox" Width="98" VerticalAlignment="Center" SelectedIndex="0" SelectionChanged="Wheel_Changed" ToolTip="滚轮翻页 / 缩放；选「滚轮调速」后向上加快、向下减慢，每次 0.1 秒"><ComboBoxItem Content="滚轮翻页"/><ComboBoxItem Content="滚轮缩放"/><ComboBoxItem Content="滚轮调速"/></ComboBox>
+    <CheckBox x:Name="AutoPageCheck" Content="自动翻页" VerticalAlignment="Center" Margin="8,0,2,0" IsChecked="False" Checked="AutoPage_Changed" Unchecked="AutoPage_Changed" ToolTip="开关自动翻页；间隔在右边输入"/>
+    <TextBox x:Name="IntervalBox" Width="48" VerticalAlignment="Center" Text="3" TextChanged="Interval_TextChanged" ToolTip="自动翻页间隔（秒），可输入小数"/>
+    <TextBlock Text="秒" VerticalAlignment="Center" Margin="2,0,8,0" Foreground="{DynamicResource Brush.Muted}"/>
+    <CheckBox x:Name="DoublePageCheck" Content="双页" VerticalAlignment="Center" Margin="2,0,4,0" IsChecked="False" Checked="DoublePage_Changed" Unchecked="DoublePage_Changed" ToolTip="左右同时显示两张图片"/>
+    <ComboBox x:Name="DoubleStepBox" Width="86" VerticalAlignment="Center" SelectedIndex="1" IsEnabled="False" SelectionChanged="DoubleStep_Changed" ToolTip="双页时下一页翻一张图或两张图"><ComboBoxItem Content="翻一张"/><ComboBoxItem Content="翻两张"/></ComboBox>
     <Button Content="‹ 上一张" Padding="10,4" Click="Prev_Click"/>
     <Button Content="下一张 ›" Padding="10,4" Click="Next_Click"/>
     <Button Content="关闭" Padding="10,4" Click="Close_Click" IsCancel="True"/>

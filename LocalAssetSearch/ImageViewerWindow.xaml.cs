@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -24,14 +25,19 @@ namespace LocalAssetSearch;
 /// </summary>
 public partial class ImageViewerWindow : Window
 {
+    private enum WheelMode { Page, Zoom, Interval }
+
     private readonly List<string> _files;
     private readonly DispatcherTimer _timer = new();
     private readonly DispatcherTimer _gifTimer = new();
     private int _index;
     private int _loadVersion;
-    private int _lastPresetIndex = 2;      // 默认「每 3 秒」
-    private bool _initializing = true;     // XAML 里设置 SelectedIndex 也会触发事件，先挡住
+    private bool _initializing = true;     // XAML 里设置选中项/文字也会触发事件，先挡住
     private bool _timerAdvancing;
+    private double _intervalSeconds = 3.0;
+
+    private bool _doublePage;
+    private int _doubleStep = 2;
 
     // GIF 动画：WPF 的 Image 不会自己播放 GIF，这里按帧延迟在 UI 线程上逐帧换图。
     private List<BitmapSource>? _gifFrames;
@@ -39,8 +45,8 @@ public partial class ImageViewerWindow : Window
     private int _gifIndex;
     private int _gifFrameCount;
 
-    // 滚轮模式：翻页或缩放；缩放后左键拖动平移。
-    private bool _wheelZoom;
+    // 滚轮模式：翻页 / 缩放 / 调自动翻页间隔；缩放后左键拖动平移。
+    private WheelMode _wheelMode = WheelMode.Page;
     private double _zoomScale = 1.0;
     private Point _zoomOffset;
     private bool _panning;
@@ -49,15 +55,19 @@ public partial class ImageViewerWindow : Window
     private Point _panStart;
     private Point _panOrigin;
 
-    // 自检用：确认预设真的启动了计时器、点击真的能推进 / 关闭。
+    // 自检用：确认计时器、翻页、GIF、滚轮和双页状态。
     internal int CurrentIndex => _index;
     internal bool IsAtLastPage => AtLast;
     internal bool AutoPageEnabled => _timer.IsEnabled;
     internal TimeSpan AutoPageInterval => _timer.Interval;
+    internal double AutoPageSecondsForTest => _intervalSeconds;
     internal int GifFrameCountForTest => _gifFrameCount;
     internal int GifFrameIndexForTest => _gifIndex;
     internal bool GifAnimatingForTest => _gifTimer.IsEnabled;
-    internal bool WheelZoomModeForTest => _wheelZoom;
+    internal bool WheelZoomModeForTest => _wheelMode == WheelMode.Zoom;
+    internal int WheelModeForTest => (int)_wheelMode;
+    internal bool DoublePageForTest => _doublePage;
+    internal int DoubleStepForTest => _doubleStep;
     internal double ZoomScaleForTest => _zoomScale;
 
     public ImageViewerWindow(string folderPath)
@@ -73,9 +83,26 @@ public partial class ImageViewerWindow : Window
         // 从封面那张开始，也就是「第一张」。
         _index = Math.Max(0, _files.IndexOf(FolderCover.Find(folderPath)));
 
+        if (double.TryParse(Settings.Get("viewer.interval", "3"), NumberStyles.Float, CultureInfo.InvariantCulture, out var savedInterval))
+            _intervalSeconds = Math.Clamp(Math.Round(savedInterval, 1), 0.1, 3600);
+        IntervalBox.Text = _intervalSeconds.ToString("0.#", CultureInfo.InvariantCulture);
+        _timer.Interval = TimeSpan.FromSeconds(_intervalSeconds);
+        AutoPageCheck.IsChecked = false;
+
         // 滚轮模式是全局偏好，所有看图窗口共用。
-        _wheelZoom = string.Equals(Settings.Get("viewer.wheel", "page"), "zoom", StringComparison.OrdinalIgnoreCase);
-        WheelBox.SelectedIndex = _wheelZoom ? 1 : 0;
+        _wheelMode = Settings.Get("viewer.wheel", "page") switch
+        {
+            "zoom" => WheelMode.Zoom,
+            "interval" => WheelMode.Interval,
+            _ => WheelMode.Page,
+        };
+        WheelBox.SelectedIndex = (int)_wheelMode;
+
+        _doublePage = Settings.Get("viewer.double", "0") == "1";
+        _doubleStep = Settings.Get("viewer.doubleStep", "2") == "1" ? 1 : 2;
+        DoublePageCheck.IsChecked = _doublePage;
+        DoubleStepBox.SelectedIndex = _doubleStep == 1 ? 0 : 1;
+        UpdatePagesLayout();
 
         _timer.Tick += Timer_Tick;
         _gifTimer.Tick += Gif_Tick;
@@ -93,9 +120,12 @@ public partial class ImageViewerWindow : Window
             InfoText.Text = "这个文件夹里没有可以显示的图片。";
             return;
         }
-        var line = $"{_index + 1} / {_files.Count}　{Path.GetFileName(_files[_index])}";
+        var hasRight = _doublePage && _index + 1 < _files.Count;
+        var line = hasRight
+            ? $"{_index + 1}–{_index + 2} / {_files.Count}　{Path.GetFileName(_files[_index])}  |  {Path.GetFileName(_files[_index + 1])}"
+            : $"{_index + 1} / {_files.Count}　{Path.GetFileName(_files[_index])}";
         if (_gifFrameCount > 1) line += $"　·　GIF 动画（{_gifFrameCount} 帧）";
-        if (_timer.IsEnabled) line += $"　·　自动翻页（每 {_timer.Interval.TotalSeconds:0} 秒）";
+        if (_timer.IsEnabled) line += $"　·　自动翻页（每 {_intervalSeconds:0.#} 秒）";
         InfoText.Text = line;
     }
 
@@ -106,16 +136,25 @@ public partial class ImageViewerWindow : Window
         if (_files.Count == 0)
         {
             Picture.Source = null;
+            PictureRight.Source = null;
             UpdateInfo();
             return;
         }
 
         _index = Math.Clamp(_index, 0, _files.Count - 1);
-        var path = _files[_index];
+        var leftPath = _files[_index];
+        var rightPath = _doublePage && _index + 1 < _files.Count ? _files[_index + 1] : null;
         UpdateInfo();
 
         // 连按方向键时后一次请求会作废前一次，避免解码慢的图把顺序打乱。
         var version = ++_loadVersion;
+        await LoadLeftAsync(leftPath, version);
+        if (version != _loadVersion) return;
+        await LoadRightAsync(rightPath, version);
+    }
+
+    private async Task LoadLeftAsync(string path, int version)
+    {
         try
         {
             if (IsGif(path))
@@ -155,6 +194,25 @@ public partial class ImageViewerWindow : Window
             StopGif();
             Picture.Source = null;
             InfoText.Text = $"无法显示 {Path.GetFileName(path)}：{ex.Message}";
+        }
+    }
+
+    /// <summary>右侧页暂时按静态图显示；左侧 GIF 在单页/双页下都继续动画。</summary>
+    private async Task LoadRightAsync(string? path, int version)
+    {
+        if (!_doublePage || path is null)
+        {
+            PictureRight.Source = null;
+            return;
+        }
+        try
+        {
+            var bitmap = await Task.Run(() => Decode(path));
+            if (version == _loadVersion) PictureRight.Source = bitmap;
+        }
+        catch
+        {
+            if (version == _loadVersion) PictureRight.Source = null;
         }
     }
 
@@ -237,13 +295,16 @@ public partial class ImageViewerWindow : Window
         _gifIndex = 0;
     }
 
-    private bool AtLast => _files.Count == 0 || _index >= _files.Count - 1;
+    private int PageStep => _doublePage ? _doubleStep : 1;
+    private bool AtLast => _files.Count == 0 || _index + PageStep >= _files.Count;
 
     private async Task StepAsync(int delta)
     {
         if (_files.Count == 0) return;
-        var next = _index + delta;
-        if (next < 0 || next >= _files.Count) return;
+        var step = _doublePage ? _doubleStep : 1;
+        var next = _index + (delta < 0 ? -step : step);
+        next = Math.Clamp(next, 0, _files.Count - 1);
+        if (next == _index) return;
         _index = next;
         await ShowCurrentAsync();
         // 手动翻页后把自动翻页的倒计时重新算起：否则刚点完下一张，
@@ -251,29 +312,83 @@ public partial class ImageViewerWindow : Window
         RestartAutoTimer();
     }
 
-    // ---------- 自动翻页 ----------
+    private void UpdatePagesLayout()
+    {
+        Grid.SetColumnSpan(Picture, _doublePage ? 1 : 2);
+        PictureRight.Visibility = _doublePage ? Visibility.Visible : Visibility.Collapsed;
+        DoubleStepBox.IsEnabled = _doublePage;
+        if (!_doublePage) PictureRight.Source = null;
+    }
 
-    internal static int PresetSeconds(int index) => index switch { 1 => 2, 2 => 3, 3 => 5, 4 => 10, _ => 3 };
-
-    private void Interval_Changed(object sender, SelectionChangedEventArgs e)
+    private async void DoublePage_Changed(object sender, RoutedEventArgs e)
     {
         if (_initializing) return;
+        _doublePage = DoublePageCheck.IsChecked == true;
+        Settings.Set("viewer.double", _doublePage ? "1" : "0");
+        UpdatePagesLayout();
+        await ShowCurrentAsync();
+    }
 
-        if (IntervalBox.SelectedIndex <= 0)
-        {
-            _timer.Stop();
-            UpdateInfo();
-            return;
-        }
-
-        _lastPresetIndex = IntervalBox.SelectedIndex;
-        _timer.Interval = TimeSpan.FromSeconds(PresetSeconds(IntervalBox.SelectedIndex));
-        _timer.Start();
+    private void DoubleStep_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_initializing) return;
+        _doubleStep = DoubleStepBox.SelectedIndex == 0 ? 1 : 2;
+        Settings.Set("viewer.doubleStep", _doubleStep.ToString(CultureInfo.InvariantCulture));
         UpdateInfo();
     }
 
-    /// <summary>A 键：在「不自动翻页」和上次选的间隔之间切换。</summary>
-    private void ToggleAuto() => IntervalBox.SelectedIndex = _timer.IsEnabled ? 0 : _lastPresetIndex;
+    // ---------- 自动翻页 ----------
+
+    private void AutoPage_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_initializing) return;
+        if (AutoPageCheck.IsChecked == true)
+        {
+            if (!TryReadInterval(out var seconds)) seconds = _intervalSeconds;
+            SetInterval(seconds, updateText: true);
+            _timer.Start();
+        }
+        else
+        {
+            _timer.Stop();
+        }
+        UpdateInfo();
+    }
+
+    private void Interval_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_initializing) return;
+        if (TryReadInterval(out var seconds)) SetInterval(seconds, updateText: false);
+    }
+
+    private bool TryReadInterval(out double seconds)
+    {
+        seconds = 0;
+        var text = IntervalBox.Text.Trim();
+        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out var value) &&
+            !double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+            return false;
+        if (value <= 0) return false;
+        seconds = Math.Clamp(Math.Round(value, 1), 0.1, 3600);
+        return true;
+    }
+
+    private void SetInterval(double seconds, bool updateText)
+    {
+        seconds = Math.Clamp(Math.Round(seconds, 1), 0.1, 3600);
+        _intervalSeconds = seconds;
+        _timer.Interval = TimeSpan.FromSeconds(seconds);
+        if (updateText)
+        {
+            var text = seconds.ToString("0.#", CultureInfo.InvariantCulture);
+            if (IntervalBox.Text != text) IntervalBox.Text = text;
+        }
+        Settings.Set("viewer.interval", seconds.ToString("0.#", CultureInfo.InvariantCulture));
+        UpdateInfo();
+    }
+
+    /// <summary>A 键：开 / 关自动翻页。</summary>
+    private void ToggleAuto() => AutoPageCheck.IsChecked = !_timer.IsEnabled;
 
     /// <summary>每次真正翻页后重置倒计时；计时器没开时什么都不做。</summary>
     private void RestartAutoTimer()
@@ -314,6 +429,9 @@ public partial class ImageViewerWindow : Window
 
     private async void Surface_Click(object sender, MouseButtonEventArgs e)
     {
+        // 下方工具栏空白处、信息栏点击不翻页；只有图片区域才响应。
+        if (!Viewport.IsMouseOver) return;
+
         // 缩放模式下拖动过画面时，这一次抬手不算点击翻页。
         if (_suppressClick)
         {
@@ -335,9 +453,19 @@ public partial class ImageViewerWindow : Window
     private void Wheel_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (_initializing) return;
-        _wheelZoom = WheelBox.SelectedIndex == 1;
-        Settings.Set("viewer.wheel", _wheelZoom ? "zoom" : "page");
-        if (!_wheelZoom) ResetZoom();
+        _wheelMode = WheelBox.SelectedIndex switch
+        {
+            1 => WheelMode.Zoom,
+            2 => WheelMode.Interval,
+            _ => WheelMode.Page,
+        };
+        Settings.Set("viewer.wheel", _wheelMode switch
+        {
+            WheelMode.Zoom => "zoom",
+            WheelMode.Interval => "interval",
+            _ => "page",
+        });
+        if (_wheelMode != WheelMode.Zoom) ResetZoom();
         else UpdateZoomCursor();
     }
 
@@ -346,7 +474,15 @@ public partial class ImageViewerWindow : Window
         if (_files.Count == 0) return;
         e.Handled = true;
 
-        if (!_wheelZoom)
+        if (_wheelMode == WheelMode.Interval)
+        {
+            // 向上加快（间隔 -0.1 秒），向下减慢（+0.1 秒）。
+            if (e.Delta > 0) SetInterval(_intervalSeconds - 0.1, updateText: true);
+            else if (e.Delta < 0) SetInterval(_intervalSeconds + 0.1, updateText: true);
+            return;
+        }
+
+        if (_wheelMode == WheelMode.Page)
         {
             if (e.Delta > 0) await StepAsync(-1);
             else if (e.Delta < 0) await StepAsync(1);
@@ -381,7 +517,7 @@ public partial class ImageViewerWindow : Window
         // 上一次拖动结束时有些情况下根 Grid 收不到 MouseUp，标志会留到下一次点击；
         // 每次按下先清掉，避免吞掉接下来的第一次翻页点击。
         _suppressClick = false;
-        if (!_wheelZoom || _zoomScale <= 1.001) return;
+        if (_wheelMode != WheelMode.Zoom || _zoomScale <= 1.001) return;
         _panning = true;
         _panMoved = false;
         _panStart = e.GetPosition(Viewport);
@@ -444,6 +580,10 @@ public partial class ImageViewerWindow : Window
         PictureScale.ScaleY = _zoomScale;
         PictureTranslate.X = _zoomOffset.X;
         PictureTranslate.Y = _zoomOffset.Y;
+        PictureRightScale.ScaleX = _zoomScale;
+        PictureRightScale.ScaleY = _zoomScale;
+        PictureRightTranslate.X = _zoomOffset.X;
+        PictureRightTranslate.Y = _zoomOffset.Y;
         UpdateZoomCursor();
     }
 
@@ -459,42 +599,56 @@ public partial class ImageViewerWindow : Window
         PictureScale.ScaleY = 1.0;
         PictureTranslate.X = 0;
         PictureTranslate.Y = 0;
+        PictureRightScale.ScaleX = 1.0;
+        PictureRightScale.ScaleY = 1.0;
+        PictureRightTranslate.X = 0;
+        PictureRightTranslate.Y = 0;
         UpdateZoomCursor();
     }
 
     private void UpdateZoomCursor()
     {
-        Viewport.Cursor = _wheelZoom && _zoomScale > 1.001 ? Cursors.SizeAll : Cursors.Arrow;
+        Viewport.Cursor = _wheelMode == WheelMode.Zoom && _zoomScale > 1.001 ? Cursors.SizeAll : Cursors.Arrow;
     }
 
     // ---------- 键盘 ----------
 
     private async void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // 输入间隔时，方向键/空格/字母都留给输入框；Esc 和 Ctrl+W 仍可关窗。
+        if (Keyboard.FocusedElement is TextBox &&
+            e.Key != Key.Escape &&
+            !(e.Key == Key.W && (Keyboard.Modifiers & ModifierKeys.Control) != 0))
+            return;
+
+        // 先置 Handled 再 await：否则下拉框会在异步翻页期间收到方向键并改选项。
         switch (e.Key)
         {
             case Key.Left:
             case Key.PageUp:
-                await StepAsync(-1); e.Handled = true; break;
+                e.Handled = true; await StepAsync(-1); break;
             case Key.Right:
             case Key.PageDown:
-                await StepAsync(1); e.Handled = true; break;
+                e.Handled = true; await StepAsync(1); break;
             // 空格：普通页翻下一页；已经在最后一页时直接关窗。
             case Key.Space when AtLast:
-                Close(); e.Handled = true; break;
+                e.Handled = true; Close(); break;
             case Key.Space:
-                await StepAsync(1); e.Handled = true; break;
+                e.Handled = true; await StepAsync(1); break;
             case Key.Home:
-                _index = 0; await ShowCurrentAsync(); e.Handled = true; break;
+                e.Handled = true; _index = 0; await ShowCurrentAsync(); break;
             case Key.End:
-                _index = _files.Count - 1; await ShowCurrentAsync(); e.Handled = true; break;
+                e.Handled = true;
+                _index = _doublePage ? Math.Max(0, _files.Count - _doubleStep) : _files.Count - 1;
+                await ShowCurrentAsync();
+                break;
             case Key.A when (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) == 0:
-                ToggleAuto(); e.Handled = true; break;
+                e.Handled = true; ToggleAuto(); break;
             case Key.Escape:
-                Close(); e.Handled = true; break;
+                e.Handled = true; Close(); break;
             // Ctrl+W 关窗，和大多数看图/浏览器一致。
             case Key.W when (Keyboard.Modifiers & ModifierKeys.Control) != 0:
-                Close(); e.Handled = true; break;
+                e.Handled = true; Close(); break;
         }
     }
 
