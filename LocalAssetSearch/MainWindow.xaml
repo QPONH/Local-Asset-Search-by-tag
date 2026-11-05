@@ -5,6 +5,7 @@
    <Button Content="添加/扫描目录" Click="Scan_Click"/>
    <Button Content="标签管理" Click="ManageTags_Click" ToolTip="设置标签分类、改名、删除标签"/>
    <Button Content="管理文件夹标签" Click="FolderTags_Click"/>
+   <Button Content="历史记录" Click="History_Click" ToolTip="最近打开和关闭的文件夹"/>
    <Button x:Name="AutoRefreshButton" Content="进入时刷新：关" Click="AutoRefresh_Click" ToolTip="开启后，每次打开工具会重新扫描上次选择的目录；不需要再手动点扫描"/>
    <Button Content="导出清单" Click="Export_Click" ToolTip="把当前筛选出的文件夹名称导出成文本清单"/>
    <Button Content="库另存为…" Click="BackupLibrary_Click" ToolTip="把标签和文件夹列表另存为 JSON 文档；不包含图片，也不会移动磁盘文件"/>
@@ -15,7 +16,7 @@
    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
     <TextBox x:Name="SearchBox" Grid.Column="0" Margin="3" VerticalContentAlignment="Center" ToolTip="按文件夹名、路径、作品编号或作者搜索" KeyDown="SearchBox_KeyDown"/>
     <ComboBox x:Name="MatchBox" Grid.Column="1" Width="90" Margin="3" SelectedIndex="0"><ComboBoxItem Content="AND 全部"/><ComboBoxItem Content="OR 任意"/></ComboBox>
-    <ComboBox x:Name="SortBox" Grid.Column="2" Width="190" Margin="3" SelectionChanged="Sort_Changed" ToolTip="结果排序方式"><ComboBoxItem Content="结尾 {页数,位置}"/><ComboBoxItem Content="结尾 {页数,位置} 倒序"/><ComboBoxItem Content="首字母 A→Z"/><ComboBoxItem Content="首字母 Z→A"/><ComboBoxItem Content="识别文件 GlobalIndex"/></ComboBox>
+    <ComboBox x:Name="SortBox" Grid.Column="2" Width="190" Margin="3" SelectionChanged="Sort_Changed" DropDownOpened="SortBox_DropDownOpened" DropDownClosed="SortBox_DropDownClosed" ToolTip="结果排序方式；选「随机」每次都会重新打乱"><ComboBoxItem Content="结尾 {页数,位置}"/><ComboBoxItem Content="结尾 {页数,位置} 倒序"/><ComboBoxItem Content="首字母 A→Z"/><ComboBoxItem Content="首字母 Z→A"/><ComboBoxItem Content="识别文件 GlobalIndex"/><ComboBoxItem Content="随机"/></ComboBox>
     <Button Grid.Column="3" Content="搜索" Click="Search_Click"/>
     <Button Grid.Column="4" Content="清除筛选" Click="Clear_Click"/>
    </Grid>
@@ -50,7 +51,7 @@
        <Button Content="跳转" Padding="8,3" Click="Jump_Click"/>
       </StackPanel>
      </DockPanel>
-     <ScrollViewer x:Name="ResultsScroll" VerticalScrollBarVisibility="Auto"><ItemsControl x:Name="Results"><ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel><ItemsControl.ItemTemplate><DataTemplate>
+     <ScrollViewer x:Name="ResultsScroll" VerticalScrollBarVisibility="Auto" PreviewMouseWheel="ResultsScroll_PreviewMouseWheel"><ItemsControl x:Name="Results"><ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel><ItemsControl.ItemTemplate><DataTemplate>
       <Border Width="280" Margin="5" Padding="7" ContextMenuOpening="Card_ContextMenuOpening" Background="{DynamicResource Brush.Card}" BorderBrush="{DynamicResource Brush.CardBorder}" BorderThickness="1" CornerRadius="8">
        <Border.ContextMenu>
         <ContextMenu>
@@ -66,8 +67,8 @@
         <Grid.RowDefinitions>
          <RowDefinition Height="372"/>
          <RowDefinition Height="22"/>
-         <RowDefinition Height="52"/>
-         <RowDefinition Height="58"/>
+         <RowDefinition Height="70"/>
+         <RowDefinition Height="40"/>
         </Grid.RowDefinitions>
         <Border Grid.Row="0" Cursor="Hand" MouseLeftButtonUp="Cover_Click" Tag="{Binding Path}" Background="{DynamicResource Brush.Soft}" CornerRadius="6" ClipToBounds="True" ToolTip="点击在工具内看图，左右方向键翻页">
          <Grid>
@@ -78,8 +79,8 @@
          </Grid>
         </Border>
         <TextBlock Grid.Row="1" Text="{Binding ImageCountLabel}" Foreground="{DynamicResource Brush.Muted}" FontSize="11" Margin="2,4,2,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-        <ItemsControl Grid.Row="2" ItemsSource="{Binding Tags}" Margin="2,5,2,0" ClipToBounds="True"><ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel><ItemsControl.ItemTemplate><DataTemplate>
-         <Button Content="{Binding}" Tag="{Binding}" Click="TagChip_Click" MouseDoubleClick="TagChip_DoubleClick" Padding="5,1" Margin="0,0,3,3" FontSize="10" Foreground="{DynamicResource Brush.ChipText}" ToolTip="单击按该标签筛选；双击编辑标签文字（不影响已有对应）"/>
+        <ItemsControl Grid.Row="2" ItemsSource="{Binding Tags}" Margin="2,3,2,0" MaxHeight="67" ClipToBounds="True"><ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel><ItemsControl.ItemTemplate><DataTemplate>
+         <Button Content="{Binding}" Tag="{Binding}" Click="TagChip_Click" MouseDoubleClick="TagChip_DoubleClick" Padding="5,1" Margin="0,0,3,2" FontSize="10" Foreground="{DynamicResource Brush.ChipText}" ToolTip="单击按该标签筛选；双击编辑标签文字（不影响已有对应）"/>
         </DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
         <Border Grid.Row="3" VerticalAlignment="Bottom" Cursor="Hand" MouseLeftButtonUp="Title_Click" Tag="{Binding Path}" Background="{DynamicResource Brush.Input}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" CornerRadius="4" Padding="5,3" ToolTip="点击打开这个文件夹">
          <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="44"/>

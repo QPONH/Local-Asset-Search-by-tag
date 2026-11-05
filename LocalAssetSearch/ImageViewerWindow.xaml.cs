@@ -28,6 +28,8 @@ public partial class ImageViewerWindow : Window
     private enum WheelMode { Page, Zoom, Interval }
 
     private readonly List<string> _files;
+    private readonly string _folderPath;
+    private bool _historyOpenRecorded;
     private readonly DispatcherTimer _timer = new();
     private readonly DispatcherTimer _gifTimer = new();
     private int _index;
@@ -79,6 +81,7 @@ public partial class ImageViewerWindow : Window
         var name = Path.GetFileName(folderPath.TrimEnd(Path.DirectorySeparatorChar));
         Title = string.IsNullOrEmpty(name) ? "看图" : $"{name} — 看图";
 
+        _folderPath = folderPath;
         _files = FolderCover.ListImages(folderPath);
         // 从封面那张开始，也就是「第一张」。
         _index = Math.Max(0, _files.IndexOf(FolderCover.Find(folderPath)));
@@ -106,8 +109,21 @@ public partial class ImageViewerWindow : Window
 
         _timer.Tick += Timer_Tick;
         _gifTimer.Tick += Gif_Tick;
-        Closed += (_, _) => { _timer.Stop(); _gifTimer.Stop(); };
-        Loaded += async (_, _) => await ShowCurrentAsync();
+        Closed += (_, _) =>
+        {
+            _timer.Stop();
+            _gifTimer.Stop();
+            if (_historyOpenRecorded) ViewerHistory.AddClose(_folderPath);
+        };
+        Loaded += async (_, _) =>
+        {
+            if (!_historyOpenRecorded)
+            {
+                _historyOpenRecorded = true;
+                ViewerHistory.AddOpen(_folderPath);
+            }
+            await ShowCurrentAsync();
+        };
         _initializing = false;
     }
 

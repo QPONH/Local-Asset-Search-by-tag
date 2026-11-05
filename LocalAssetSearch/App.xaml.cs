@@ -182,6 +182,25 @@ public partial class App : Application
             Try("读取素材", () => sample = db!.Search("", Array.Empty<long>(), true));
             StartupLog.Write($"自检 素材样本数: {sample.Count}");
 
+            // 随机排序：同种子结果稳定（分页不会重复/漏），换种子顺序会变。
+            Try("随机排序分页稳定且可重新洗牌", () =>
+            {
+                var page1 = db!.SearchPage("", Array.Empty<long>(), true, SortMode.Random, 0, 10, 12345).Items;
+                var page1Again = db!.SearchPage("", Array.Empty<long>(), true, SortMode.Random, 0, 10, 12345).Items;
+                var page2 = db!.SearchPage("", Array.Empty<long>(), true, SortMode.Random, 10, 10, 12345).Items;
+                var shuffled = db!.SearchPage("", Array.Empty<long>(), true, SortMode.Random, 0, 10, 999).Items;
+
+                if (!page1.Select(x => x.Id).SequenceEqual(page1Again.Select(x => x.Id)))
+                    throw new InvalidOperationException("同一个随机种子两次查询顺序不一致");
+                if (page1.Count > 1 && page1.Select(x => x.Id).SequenceEqual(shuffled.Select(x => x.Id)))
+                    throw new InvalidOperationException("换种子后顺序没有变化");
+                var ids = page1.Concat(page2).Select(x => x.Id).ToList();
+                if (ids.Count != ids.Distinct().Count())
+                    throw new InvalidOperationException("随机排序翻页出现重复条目");
+
+                StartupLog.Write($"自检 随机排序: 第一页 {page1.Count} 条、第二页 {page2.Count} 条，换种子顺序已变");
+            });
+
             // GIF：扩展名列表要认它，WIC 解码要能拆出两帧。
             Try("GIF 动图解码", () =>
             {
@@ -318,7 +337,7 @@ public partial class App : Application
                 await Task.Delay(300);
                 win.UpdateLayout();
                 var after = scroll.VerticalOffset;
-                StartupLog.Write($"自检 关闭标签后保持位置: before={before:0} after={after:0}");
+                StartupLog.Write($"自检 关闭标签后保持位置: before={before:0} after={after:0} extent={scroll.ExtentHeight:0} scrollable={scroll.ScrollableHeight:0} viewport={scroll.ViewportHeight:0}");
                 if (before <= 0) throw new InvalidOperationException("结果区没有滚动，测试前提不成立");
                 if (Math.Abs(after - before) > 2) throw new InvalidOperationException($"刷新后滚动位置变了：{before:0} → {after:0}");
 
@@ -337,6 +356,30 @@ public partial class App : Application
                 if (tagGrid is null)
                     throw new InvalidOperationException("标签筛选没有按两列布局");
                 StartupLog.Write($"自检 标签筛选两列: 列={tagGrid.Columns} 标签={tagGrid.Children.Count} 宽={tagGrid.ActualWidth:0}");
+
+                // 卡片高度：封面 372 + 数量 22 + 标签区（至少 52）+ 标题 58，加上内外边距约 520。
+                var card = Descendants<Border>(win).FirstOrDefault(b => Math.Abs(b.Width - 280) < 0.5 && b.ActualHeight > 200);
+                if (card is not null)
+                    StartupLog.Write($"自检 卡片高度: {card.ActualHeight:0}（标签区应至少 52，卡片约 520）");
+
+                // 滚轮 / 触控板灵敏度：每个 delta 只走 0.7px，再由 60fps 定时器缓缓追上。
+                // 这里连发 12 次 -10（合计 120 delta），期望平滑滚到 84px，而不是原来的一整屏。
+                scroll.ScrollToTop();
+                win.UpdateLayout();
+                for (var i = 0; i < 12; i++)
+                {
+                    var tick = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, -10)
+                    {
+                        RoutedEvent = UIElement.PreviewMouseWheelEvent,
+                    };
+                    scroll.RaiseEvent(tick);
+                }
+                await Task.Delay(500);
+                win.UpdateLayout();
+                var wheelOffset = scroll.VerticalOffset;
+                StartupLog.Write($"自检 列表平滑滚动: {wheelOffset:0.0}px（12×-10 delta，期望 84）");
+                if (wheelOffset < 60) throw new InvalidOperationException($"滚轮没有滚动：{wheelOffset:0.0}px");
+                if (wheelOffset > 110) throw new InvalidOperationException($"滚轮步长仍然太大：{wheelOffset:0.0}px");
 
                 win.Close();
             }
@@ -376,6 +419,35 @@ public partial class App : Application
                     }
                 }
                 finally { ThemeManager.Apply(wasDark); }
+            });
+
+            // 标签芯片能不能放三行：卡片标签区 70px（可用内容 67px），用真实样式实测行高。
+            Try("标签芯片三行高度", () =>
+            {
+                var chip = new Button
+                {
+                    Content = "四个字标签",
+                    FontSize = 10,
+                    Padding = new Thickness(5, 1, 5, 1),
+                    Margin = new Thickness(0, 0, 3, 2),
+                };
+                chip.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                var row = chip.DesiredSize.Height + chip.Margin.Bottom;
+                var need = row * 3;
+                StartupLog.Write($"自检 标签芯片行高: {row:0.0}px，三行={need:0.0}px（标签区最多 67px）");
+                if (need > 67) throw new InvalidOperationException($"三行标签放不下：{need:0.0}px > 67px");
+
+                // 标题区缩到 40px，两行作品名加内边距后还要放得下，不能再压。
+                var title = new TextBlock
+                {
+                    Text = "很长很长的作品名称，需要两行才能完整显示，这里再补一些字凑满两行",
+                    FontWeight = FontWeights.SemiBold,
+                    TextWrapping = TextWrapping.Wrap,
+                };
+                title.Measure(new Size(266, double.PositiveInfinity));
+                var titleNeed = title.DesiredSize.Height + 6;
+                StartupLog.Write($"自检 作品名两行高度: {title.DesiredSize.Height:0.0}px，加内边距={titleNeed:0.0}px（标题区 40px）");
+                if (titleNeed > 40) throw new InvalidOperationException($"两行作品名放不下：{titleNeed:0.0}px > 40px");
             });
 
             // 卡片上要显示「N 张图片」，验证一次列目录能同时给出封面和数量。
@@ -618,6 +690,43 @@ public partial class App : Application
                 failures++;
                 StartupLog.Write($"自检 滚轮翻页/缩放切换: 失败 -> {ex.GetType().Name}: {ex.Message}");
             }
+
+            // 历史记录：打开/关闭各保留 10 个，并且只保留最新一条同名路径。
+            Try("历史记录最多 10 个", () =>
+            {
+                ViewerHistory.ClearOpened();
+                ViewerHistory.ClearClosed();
+                try
+                {
+                    for (var i = 0; i < 12; i++)
+                        ViewerHistory.AddOpen($@"C:\tmp\history-{i}");
+                    if (ViewerHistory.Opened.Count != 10)
+                        throw new InvalidOperationException($"打开记录应为 10 个，实际 {ViewerHistory.Opened.Count}");
+                    if (ViewerHistory.Opened[0].Name != "history-11")
+                        throw new InvalidOperationException("最新打开记录没有排在最前");
+
+                    ViewerHistory.AddClose(@"C:\tmp\history-0");
+                    ViewerHistory.AddClose(@"C:\tmp\history-0");
+                    if (ViewerHistory.Closed.Count != 1)
+                        throw new InvalidOperationException("同一个文件夹关闭记录应该只保留一条");
+
+                    var win = new HistoryWindow
+                    {
+                        ShowInTaskbar = false,
+                        ShowActivated = false,
+                        WindowStartupLocation = WindowStartupLocation.Manual,
+                        Left = -20000,
+                        Top = -20000,
+                    };
+                    win.Show();
+                    win.Close();
+                }
+                finally
+                {
+                    ViewerHistory.ClearOpened();
+                    ViewerHistory.ClearClosed();
+                }
+            });
 
             // 双页显示：左右两页都在，步长可在「翻一张 / 翻两张」之间切换。
             try

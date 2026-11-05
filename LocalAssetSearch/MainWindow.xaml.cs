@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -30,6 +31,21 @@ public partial class MainWindow : Window
     private bool _initializing = true;
     private bool _autoRefreshOnStart;
     private bool _scanning;
+    private HistoryWindow? _historyWindow;
+
+    // 触控板会连发几十个小 delta，而 ScrollViewer 默认每个 notch 滚 3 行；这里卡片高 372px，
+    // 等于滚一格就跳将近两屏。改成「按像素连续滚动 + 短缓动」：每个 delta 只走
+    // WheelSensitivity 像素，剩下的交给 60fps 定时器慢慢追上，保留触控板的无极手感。
+    private double _scrollTarget;
+    private double _animOffset;
+    private double _wheelSensitivity = 0.7;
+    private System.Windows.Threading.DispatcherTimer? _scrollTimer;
+    private double? _pendingScrollOffset;
+    private int _pendingScrollTries;
+
+    // 随机排序：每次选中「随机」换一个种子，同一轮分页共用同一个种子。
+    private int _randomSeed = Environment.TickCount;
+    private bool _sortChangedDuringDrop;
 
     // 分页状态。加分页不只是为了好看：原来一次性把 2000 张卡片全实例化，还会为每张都生成缩略图。
     private int _page = 1;
@@ -42,6 +58,8 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        // App 里已经读过主题，这里在按钮都实例化之后再刷一次，避免启动首帧闪浅色。
+        ThemeManager.Apply(ThemeManager.IsDark);
         // 标题带版本号：排查「改了怎么没生效」时，一眼就能确认跑的是哪个构建。
         Title = $"本地素材搜索 v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "?"}";
         WindowSizeStore.Restore(this, "main");
@@ -53,6 +71,7 @@ public partial class MainWindow : Window
         LoadTags();
         _autoRefreshOnStart = Settings.Get("scan.refreshOnStart", "0") == "1";
         UpdateAutoRefreshButton();
+        _wheelSensitivity = ReadWheelSensitivity();
         Loaded += MainWindow_Loaded;
         _initializing = false;
         Search();
@@ -77,29 +96,51 @@ public partial class MainWindow : Window
     /// </summary>
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
+        // 有些系统会在首帧后才应用资源替换，再刷一次并强制布局，避免深色按钮先亮后暗。
+        ThemeManager.Apply(ThemeManager.IsDark);
+        UpdateLayout();
         if (!_autoRefreshOnStart) return;
         var root = Settings.Get("scan.lastRoot", "");
         if (!Directory.Exists(root)) return;
         await ScanRootAsync(root, auto: true);
     }
 
-    private static int ReadSavedSortIndex()
-        => int.TryParse(Settings.Get("sort", "0"), out var i) && i >= 0 && i <= 4 ? i : 0;
+    private const int RandomSortIndex = 5;
 
-    /// <summary>当前排序方式，与 SortBox 的五个选项一一对应。</summary>
+    private static int ReadSavedSortIndex()
+        => int.TryParse(Settings.Get("sort", "0"), out var i) && i >= 0 && i <= RandomSortIndex ? i : 0;
+
+    /// <summary>当前排序方式，与 SortBox 的六个选项一一对应。</summary>
     private SortMode CurrentSort => SortBox.SelectedIndex switch
     {
         1 => SortMode.FavoriteOrderDesc,
         2 => SortMode.TitleAsc,
         3 => SortMode.TitleDesc,
         4 => SortMode.GlobalIndex,
+        RandomSortIndex => SortMode.Random,
         _ => SortMode.FavoriteOrder,
     };
 
     private async void Sort_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (_initializing) return;
+        _sortChangedDuringDrop = true;
+        if (SortBox.SelectedIndex == RandomSortIndex) _randomSeed = Random.Shared.Next();
         Settings.Set("sort", SortBox.SelectedIndex.ToString());
+        await SearchFromFirstPageAsync();
+    }
+
+    private void SortBox_DropDownOpened(object sender, EventArgs e) => _sortChangedDuringDrop = false;
+
+    /// <summary>
+    /// 已经选在「随机」上时再点一次也要重新洗牌：
+    /// ComboBox 对同一个选中项不会再触发 SelectionChanged，只能靠下拉关闭兜底。
+    /// </summary>
+    private async void SortBox_DropDownClosed(object sender, EventArgs e)
+    {
+        if (_initializing || _sortChangedDuringDrop) return;
+        if (SortBox.SelectedIndex != RandomSortIndex) return;
+        _randomSeed = Random.Shared.Next();
         await SearchFromFirstPageAsync();
     }
 
@@ -116,6 +157,7 @@ public partial class MainWindow : Window
 
     private void ScrollResultsToTop()
     {
+        StopScrollAnimation(keepTarget: false);
         ResultsScroll.ScrollToTop();
         // 换页后条目刚重建，布局还没走完，再补一次保证真的回到顶部。
         Dispatcher.BeginInvoke(new Action(() => ResultsScroll.ScrollToTop()),
@@ -125,9 +167,104 @@ public partial class MainWindow : Window
     /// <summary>刷新当前页时把滚动位置也恢复回来；打标签窗口关闭后不要跳回顶部。</summary>
     private void RestoreScroll(double offset)
     {
+        StopScrollAnimation(keepTarget: false);
+        _pendingScrollOffset = offset;
+        _pendingScrollTries = 0;
         ResultsScroll.ScrollToVerticalOffset(offset);
-        Dispatcher.BeginInvoke(new Action(() => ResultsScroll.ScrollToVerticalOffset(offset)),
-            System.Windows.Threading.DispatcherPriority.Loaded);
+        // 卡片高度是自适应的，换页后条目刚重建会分几轮布局；等布局真正排完（可滚动高度够到
+        // 目标）再补一次，否则偏移会被中间态的可滚动高度夹成一个小值。
+        LayoutUpdated -= RestoreScrollAfterLayout;
+        LayoutUpdated += RestoreScrollAfterLayout;
+    }
+
+    private void RestoreScrollAfterLayout(object? sender, EventArgs e)
+    {
+        if (_pendingScrollOffset is not { } offset)
+        {
+            LayoutUpdated -= RestoreScrollAfterLayout;
+            return;
+        }
+        if (ResultsScroll.ScrollableHeight < offset && ++_pendingScrollTries < 20) return;
+        LayoutUpdated -= RestoreScrollAfterLayout;
+        _pendingScrollOffset = null;
+        ResultsScroll.ScrollToVerticalOffset(offset);
+    }
+
+    /// <summary>滚轮灵敏度：每个 delta 单位滚多少像素。settings.ini 的 ui.wheelSensitivity 可覆盖默认 0.7。</summary>
+    private static double ReadWheelSensitivity()
+    {
+        var raw = Settings.Get("ui.wheelSensitivity", "");
+        return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && v >= 0.1 && v <= 3
+            ? v
+            : 0.7;
+    }
+
+    /// <summary>
+    /// 文件夹列表的滚轮 / 触控板滚动。
+    /// 不按 notch 取整：每个 delta 直接换算成像素目标，再用 60fps 的短缓动追上去，
+    /// 触控板的无极手感能保留，鼠标一格也不会再跳一屏。
+    /// </summary>
+    private void ResultsScroll_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (e.Delta == 0 || ResultsScroll.ScrollableHeight <= 0) return;
+        e.Handled = true;
+
+        // 动画没在跑时以实际位置为准：拖过滚动条、翻过页之后，目标不能还是旧值。
+        if (_scrollTimer is null || !_scrollTimer.IsEnabled)
+            _scrollTarget = ResultsScroll.VerticalOffset;
+
+        _scrollTarget = Math.Clamp(_scrollTarget - e.Delta * _wheelSensitivity, 0, ResultsScroll.ScrollableHeight);
+        EnsureScrollTimer();
+    }
+
+    private void EnsureScrollTimer()
+    {
+        if (_scrollTimer is null)
+        {
+            _scrollTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Render)
+            {
+                Interval = TimeSpan.FromMilliseconds(16),
+            };
+            _scrollTimer.Tick += ScrollAnimationTick;
+        }
+        if (!_scrollTimer.IsEnabled)
+        {
+            // 自己记住动画当前位置：ScrollToVerticalOffset 之后马上读 VerticalOffset 不一定拿到新值，
+            // 靠它判断进度会让动画在第一帧就误判「被人挪动了」而停住。
+            _animOffset = ResultsScroll.VerticalOffset;
+            _scrollTimer.Start();
+        }
+    }
+
+    private void ScrollAnimationTick(object? sender, EventArgs e)
+    {
+        // 换页后内容高度会变，先夹一次，免得一直追一个够不到的目标。
+        _scrollTarget = Math.Clamp(_scrollTarget, 0, ResultsScroll.ScrollableHeight);
+        var diff = _scrollTarget - _animOffset;
+
+        if (Math.Abs(diff) < 0.5)
+        {
+            _animOffset = _scrollTarget;
+            ResultsScroll.ScrollToVerticalOffset(_animOffset);
+            _scrollTimer?.Stop();
+            return;
+        }
+
+        // 指数逼近：每帧吃掉剩余距离的 40%，大约 5 帧（80ms）走完，慢但不拖沓。
+        var step = diff * 0.4;
+        if (Math.Abs(step) < 1) step = Math.Sign(diff);
+        _animOffset += step;
+        ResultsScroll.ScrollToVerticalOffset(_animOffset);
+    }
+
+    private void StopScrollAnimation(bool keepTarget)
+    {
+        _scrollTimer?.Stop();
+        if (!keepTarget)
+        {
+            _scrollTarget = ResultsScroll.VerticalOffset;
+            _animOffset = _scrollTarget;
+        }
     }
 
     private void SetBusy(bool busy) { IsEnabled = !busy; }
@@ -145,7 +282,8 @@ public partial class MainWindow : Window
     {
         if (_scanning) return;
         _scanning = true;
-        SetBusy(true);
+        // 自动刷新在启动时跑，不能把整个窗口禁用；否则所有按钮会先显示成浅色/禁用态。
+        if (!auto) SetBusy(true);
         StatusText.Text = auto ? "正在刷新上次选择的目录…" : "正在扫描目录…";
         try
         {
@@ -161,7 +299,7 @@ public partial class MainWindow : Window
             StatusText.Text = auto ? $"自动刷新失败：{ex.Message}" : "扫描失败。";
             if (!auto) System.Windows.MessageBox.Show(ex.Message, "扫描失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
-        finally { SetBusy(false); _scanning = false; }
+        finally { if (!auto) SetBusy(false); _scanning = false; }
     }
 
     /// <summary>
@@ -297,7 +435,8 @@ public partial class MainWindow : Window
         var keepOffset = resetScroll ? 0 : ResultsScroll.VerticalOffset;
         try
         {
-            var (items, total) = await Task.Run(() => _db.SearchPage(keyword, tagIds, matchAll, sort, offset, limit));
+            var seed = sort == SortMode.Random ? _randomSeed : 0;
+            var (items, total) = await Task.Run(() => _db.SearchPage(keyword, tagIds, matchAll, sort, offset, limit, seed));
             if (version != Volatile.Read(ref _searchVersion)) return;
 
             // 页码可能越界（例如删光了最后一页），退到最后一页重查一次。
@@ -645,6 +784,18 @@ public partial class MainWindow : Window
     }
 
     private void RefreshTags_Click(object sender, RoutedEventArgs e) => LoadTags();
+
+    private void History_Click(object sender, RoutedEventArgs e)
+    {
+        if (_historyWindow is { IsVisible: true })
+        {
+            _historyWindow.Activate();
+            return;
+        }
+        _historyWindow = new HistoryWindow();
+        _historyWindow.Closed += (_, _) => _historyWindow = null;
+        _historyWindow.Show();
+    }
 
     private async void Clear_Click(object sender, RoutedEventArgs e)
     {

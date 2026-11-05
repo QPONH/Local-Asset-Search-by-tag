@@ -374,6 +374,7 @@ CREATE INDEX IF NOT EXISTS IX_Assets_Name ON Assets(Name);";
         // 倒序：页码大的在前，同一页里序号大的在前；解析不出的仍然排最后。
         SortMode.FavoriteOrderDesc => "ORDER BY (a.FavPage IS NULL), a.FavPage DESC, a.FavPos DESC, a.Name COLLATE NOCASE DESC",
         // 默认：解析得出 {页码,序号} 的排前面，页码小的在前，同页里序号小的在前，其余按名称。
+        // 随机排序不走这里：SQLite 没有可播种的随机函数，是在 SearchPage 里整取后洗牌的。
         _ => "ORDER BY (a.FavPage IS NULL), a.FavPage, a.FavPos, a.Name COLLATE NOCASE",
     };
 
@@ -649,8 +650,8 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
         return (string.Join(" AND ",where), args);
     }
 
-    /// <summary>分页查询。返回当前页的条目和符合条件总数。</summary>
-    public (List<AssetItem> Items, int Total) SearchPage(string keyword, IReadOnlyCollection<long> tagIds, bool matchAll, SortMode sort, int offset, int limit)
+    /// <summary>分页查询。返回当前页的条目和符合条件总数。randomSeed 只影响随机排序。</summary>
+    public (List<AssetItem> Items, int Total) SearchPage(string keyword, IReadOnlyCollection<long> tagIds, bool matchAll, SortMode sort, int offset, int limit, int randomSeed = 0)
     {
         if (offset < 0) offset = 0;
         if (limit <= 0) limit = 60;
@@ -668,15 +669,38 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
         var result=new List<AssetItem>();
         using (var cmd=c.CreateCommand())
         {
-            cmd.CommandText=$"SELECT a.Id,a.Path,a.Name,a.Kind,a.Size,a.ModifiedUtc FROM Assets a WHERE {whereSql} {OrderByClause(sort)} LIMIT $limit OFFSET $offset";
+            // 随机排序不交给 SQL：SQLite 没有可播种的随机函数，用 Id 做线性变换仍是单调的，
+            // 换种子也看不出区别。这里整取后在内存里按种子洗牌，再切出这一页。
+            cmd.CommandText = sort == SortMode.Random
+                ? $"SELECT a.Id,a.Path,a.Name,a.Kind,a.Size,a.ModifiedUtc FROM Assets a WHERE {whereSql}"
+                : $"SELECT a.Id,a.Path,a.Name,a.Kind,a.Size,a.ModifiedUtc FROM Assets a WHERE {whereSql} {OrderByClause(sort)} LIMIT $limit OFFSET $offset";
             foreach(var (n,v) in args) cmd.Parameters.AddWithValue(n,v);
-            cmd.Parameters.AddWithValue("$limit",limit);
-            cmd.Parameters.AddWithValue("$offset",offset);
+            if (sort != SortMode.Random)
+            {
+                cmd.Parameters.AddWithValue("$limit",limit);
+                cmd.Parameters.AddWithValue("$offset",offset);
+            }
             using var r=cmd.ExecuteReader();
             while(r.Read()) result.Add(new AssetItem{Id=r.GetInt64(0),Path=r.GetString(1),Name=r.GetString(2),Kind=r.GetString(3),Size=r.GetInt64(4),Modified=DateTime.Parse(r.GetString(5)).ToLocalTime()});
         }
+        if (sort == SortMode.Random)
+        {
+            Shuffle(result, randomSeed);
+            result = result.Skip(offset).Take(limit).ToList();
+        }
         if(result.Count>0){ var tagMap=GetAllAssetTags(); foreach(var item in result) if(tagMap.TryGetValue(item.Id,out var names)) item.Tags=names; }
         return (result, total);
+    }
+
+    /// <summary>Fisher–Yates 洗牌；同一个种子得到的排列完全一致，保证翻页稳定。</summary>
+    private static void Shuffle<T>(IList<T> list, int seed)
+    {
+        var rng = new Random(seed);
+        for (var i = list.Count - 1; i > 0; i--)
+        {
+            var j = rng.Next(i + 1);
+            (list[i], list[j]) = (list[j], list[i]);
+        }
     }
 
     /// <summary>不分页的整取版本，供脚本和测试使用。</summary>
