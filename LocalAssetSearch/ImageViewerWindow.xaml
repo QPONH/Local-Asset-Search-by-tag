@@ -1,40 +1,70 @@
 <Window x:Class="LocalAssetSearch.ImageViewerWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="看图" Icon="pack://application:,,,/Assets/app-32.png" Height="900" Width="1200" MinHeight="420" MinWidth="620" WindowState="Maximized" WindowStartupLocation="CenterScreen" ShowInTaskbar="True" Background="{DynamicResource Brush.Window}" PreviewKeyDown="Window_PreviewKeyDown">
  <Grid Background="{DynamicResource Brush.Window}" MouseLeftButtonUp="Surface_Click">
   <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <Grid x:Name="Viewport" Grid.Row="0" ClipToBounds="True" Background="Transparent"
-        MouseWheel="Viewport_MouseWheel"
-        MouseLeftButtonDown="Viewport_MouseLeftButtonDown"
-        MouseMove="Viewport_MouseMove"
-        MouseLeftButtonUp="Viewport_MouseLeftButtonUp"
-        LostMouseCapture="Viewport_LostMouseCapture">
-   <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-   <Image x:Name="Picture" Grid.Column="0" Grid.ColumnSpan="2" Stretch="Uniform" Margin="8" RenderOptions.BitmapScalingMode="HighQuality" RenderTransformOrigin="0,0">
-    <Image.RenderTransform>
-     <TransformGroup>
-      <ScaleTransform x:Name="PictureScale" ScaleX="1" ScaleY="1"/>
-      <TranslateTransform x:Name="PictureTranslate"/>
-     </TransformGroup>
-    </Image.RenderTransform>
-   </Image>
-   <Image x:Name="PictureRight" Grid.Column="1" Visibility="Collapsed" Stretch="Uniform" Margin="8" RenderOptions.BitmapScalingMode="HighQuality" RenderTransformOrigin="0,0">
-    <Image.RenderTransform>
-     <TransformGroup>
-      <ScaleTransform x:Name="PictureRightScale" ScaleX="1" ScaleY="1"/>
-      <TranslateTransform x:Name="PictureRightTranslate"/>
-     </TransformGroup>
-    </Image.RenderTransform>
-   </Image>
+  <Grid Grid.Row="0">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+
+   <!-- 左侧标签侧边栏：右上角有收起按钮，收起后内容区左上角的「标签 ▸」把手露出来。 -->
+   <Border x:Name="TagSidebar" Grid.Column="0" Width="250" Visibility="Collapsed" Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,1,0">
+    <Grid Margin="10">
+     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+     <Grid Grid.Row="0">
+      <TextBlock Text="给这个作品打标签" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
+      <Button x:Name="TagSidebarCloseButton" Content="◂" HorizontalAlignment="Right" VerticalAlignment="Center" Padding="8,2" Click="ToggleTagSidebar_Click" ToolTip="收起侧边栏"/>
+     </Grid>
+     <ScrollViewer Grid.Row="1" Margin="0,8,0,0" VerticalScrollBarVisibility="Auto"><StackPanel x:Name="TagSidebarPanel"/></ScrollViewer>
+     <TextBlock Grid.Row="2" Text="勾选立即保存，不用点应用。" FontSize="11" Foreground="{DynamicResource Brush.Muted}" Margin="0,8,0,0" TextWrapping="Wrap"/>
+    </Grid>
+   </Border>
+
+   <Grid Grid.Column="1">
+    <!-- 单页 / 双页：两张图都放在 PageHost 里，缩放作用于整体，不会互相盖住。 -->
+    <Grid x:Name="Viewport" ClipToBounds="True" Background="Transparent"
+          MouseWheel="Viewport_MouseWheel"
+          MouseLeftButtonDown="Viewport_MouseLeftButtonDown"
+          MouseMove="Viewport_MouseMove"
+          MouseLeftButtonUp="Viewport_MouseLeftButtonUp"
+          LostMouseCapture="Viewport_LostMouseCapture">
+     <Grid x:Name="PageHost" RenderTransformOrigin="0,0">
+      <Grid.RenderTransform>
+       <TransformGroup>
+        <ScaleTransform x:Name="PictureScale" ScaleX="1" ScaleY="1"/>
+        <TranslateTransform x:Name="PictureTranslate"/>
+       </TransformGroup>
+      </Grid.RenderTransform>
+      <!-- 两张图按内容宽度并排、整体居中：间隔为 0 时左图右侧就贴着右图左侧。 -->
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+       <Image x:Name="Picture" Stretch="Uniform" Margin="8" RenderOptions.BitmapScalingMode="HighQuality"/>
+       <Image x:Name="PictureRight" Stretch="Uniform" Margin="8" Visibility="Collapsed" RenderOptions.BitmapScalingMode="HighQuality"/>
+      </StackPanel>
+     </Grid>
+    </Grid>
+
+    <!-- 竖排：所有图片从上到下一张接一张，向下滚动查看；Ctrl+滚轮平滑缩放整列。 -->
+    <ScrollViewer x:Name="VerticalViewer" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Background="Transparent"
+                  PreviewMouseWheel="VerticalViewer_PreviewMouseWheel">
+     <StackPanel x:Name="VerticalPanel" Margin="0,10,0,10"/>
+    </ScrollViewer>
+
+    <!-- 收起侧边栏时，这个把手贴在内容区左上角。 -->
+    <Button x:Name="TagSidebarButton" Content="标签 ▸" HorizontalAlignment="Left" VerticalAlignment="Top"
+            Padding="4,2" FontSize="11" Click="ToggleTagSidebar_Click" ToolTip="展开左侧边栏，给当前作品打标签"/>
+   </Grid>
   </Grid>
+
   <DockPanel Grid.Row="1" Margin="12,4,12,12">
    <TextBlock x:Name="InfoText" DockPanel.Dock="Left" VerticalAlignment="Center" Foreground="{DynamicResource Brush.Muted}" TextTrimming="CharacterEllipsis"/>
    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-    <TextBlock Text="点击 / 方向键 / 空格 翻页（末页关闭）　A 自动　Ctrl+W 关闭" VerticalAlignment="Center" Margin="0,0,10,0" FontSize="11" Foreground="{DynamicResource Brush.Muted}"/>
+    <TextBlock Text="点击 / 方向键 / 空格 翻页　A 自动　Ctrl+W 关闭" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="11" Foreground="{DynamicResource Brush.Muted}"/>
     <ComboBox x:Name="WheelBox" Width="98" VerticalAlignment="Center" SelectedIndex="0" SelectionChanged="Wheel_Changed" ToolTip="滚轮翻页 / 缩放；选「滚轮调速」后向上加快、向下减慢，每次 0.1 秒"><ComboBoxItem Content="滚轮翻页"/><ComboBoxItem Content="滚轮缩放"/><ComboBoxItem Content="滚轮调速"/></ComboBox>
-    <CheckBox x:Name="AutoPageCheck" Content="自动翻页" VerticalAlignment="Center" Margin="8,0,2,0" IsChecked="False" Checked="AutoPage_Changed" Unchecked="AutoPage_Changed" ToolTip="开关自动翻页；间隔在右边输入"/>
-    <TextBox x:Name="IntervalBox" Width="48" VerticalAlignment="Center" Text="3" TextChanged="Interval_TextChanged" ToolTip="自动翻页间隔（秒），可输入小数"/>
-    <TextBlock Text="秒" VerticalAlignment="Center" Margin="2,0,8,0" Foreground="{DynamicResource Brush.Muted}"/>
-    <CheckBox x:Name="DoublePageCheck" Content="双页" VerticalAlignment="Center" Margin="2,0,4,0" IsChecked="False" Checked="DoublePage_Changed" Unchecked="DoublePage_Changed" ToolTip="左右同时显示两张图片"/>
+    <CheckBox x:Name="AutoPageCheck" Content="自动翻页" VerticalAlignment="Center" Margin="8,0,2,0" IsChecked="False" Checked="AutoPage_Changed" Unchecked="AutoPage_Changed" ToolTip="开关自动翻页；竖排模式下是自动下滑"/>
+    <TextBox x:Name="IntervalBox" Width="48" VerticalAlignment="Center" Text="3" TextChanged="Interval_TextChanged" ToolTip="自动翻页间隔（秒）；竖排模式下是下滑速度（像素/秒）"/>
+    <TextBlock x:Name="IntervalUnit" Text="秒" VerticalAlignment="Center" Margin="2,0,8,0" Foreground="{DynamicResource Brush.Muted}"/>
+    <CheckBox x:Name="DoublePageCheck" Content="双页" VerticalAlignment="Center" Margin="2,0,4,0" IsChecked="False" Checked="DoublePage_Changed" Unchecked="DoublePage_Changed" ToolTip="左右同时显示两张图，放大时整体缩放"/>
     <ComboBox x:Name="DoubleStepBox" Width="86" VerticalAlignment="Center" SelectedIndex="1" IsEnabled="False" SelectionChanged="DoubleStep_Changed" ToolTip="双页时下一页翻一张图或两张图"><ComboBoxItem Content="翻一张"/><ComboBoxItem Content="翻两张"/></ComboBox>
+    <CheckBox x:Name="VerticalModeCheck" Content="竖排" VerticalAlignment="Center" Margin="8,0,2,0" IsChecked="False" Checked="VerticalMode_Changed" Unchecked="VerticalMode_Changed" ToolTip="所有图片从上到下一张接一张，向下滚动查看"/>
+    <TextBlock x:Name="GapLabel" Text="间隔" VerticalAlignment="Center" Margin="2,0,4,0" Foreground="{DynamicResource Brush.Muted}" Visibility="Collapsed"/>
+    <TextBox x:Name="GapBox" Width="44" VerticalAlignment="Center" Text="12" TextChanged="Gap_TextChanged" ToolTip="双页时两张图之间的水平间隔，竖排时是纵向间隔（像素）" Visibility="Collapsed"/>
     <Button Content="‹ 上一张" Padding="10,4" Click="Prev_Click"/>
     <Button Content="下一张 ›" Padding="10,4" Click="Next_Click"/>
     <Button Content="关闭" Padding="10,4" Click="Close_Click" IsCancel="True"/>

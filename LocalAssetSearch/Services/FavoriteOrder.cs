@@ -45,4 +45,51 @@ public static class FavoriteOrder
         var i = folderName.IndexOf('{');
         return (i < 0 ? folderName : folderName[..i]).Trim();
     }
+
+    /// <summary>
+    /// 目录名里的作者段。格式是 <c>作品名{作者a}{作者b}{收藏夹位置}</c>：
+    /// 去掉开头的标题和**末尾那一段位置**（纯数字或逗号数字），中间所有 <c>{...}</c> 都是作者。
+    /// 末尾不是位置的（比如只写了 <c>作品名{作者}</c>）就整段都当作者。
+    /// </summary>
+    public static List<string> AuthorsOf(string? folderName)
+    {
+        var authors = new List<string>();
+        if (string.IsNullOrEmpty(folderName)) return authors;
+
+        var segments = BracesOf(folderName);
+        if (segments.Count > 0 && IsPosition(segments[^1])) segments.RemoveAt(segments.Count - 1);
+
+        foreach (var segment in segments)
+        {
+            var author = segment.Trim();
+            if (author.Length > 0 && !authors.Contains(author, StringComparer.OrdinalIgnoreCase))
+                authors.Add(author);
+        }
+        return authors;
+    }
+
+    /// <summary>所有成对的 <c>{...}</c> 里的内容，按出现顺序（支持嵌套括号）。</summary>
+    private static List<string> BracesOf(string name)
+    {
+        var list = new List<string>();
+        var depth = 0;
+        var start = 0;
+        for (var i = 0; i < name.Length; i++)
+        {
+            if (name[i] == '{')
+            {
+                if (depth == 0) start = i + 1;
+                depth++;
+            }
+            else if (name[i] == '}')
+            {
+                depth--;
+                if (depth == 0) list.Add(name[start..i]);
+            }
+        }
+        return list;
+    }
+
+    private static bool IsPosition(string segment)
+        => Regex.IsMatch(segment, @"^\s*\d+\s*([,，]\s*\d+\s*)?$");
 }

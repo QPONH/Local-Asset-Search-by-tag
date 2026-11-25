@@ -75,6 +75,7 @@ public partial class App : Application
     /// <summary>
     /// 下拉框的选项不允许用方向键改；点击输入框以外的空白处时，
     /// 取消文字选中并让输入框失焦（文本内容保留，绑定/TextChanged 会保存）。
+    /// 另外让提示窗不参与交互、鼠标一移动就收起，避免它挡住滚轮。
     /// </summary>
     private static void RegisterGlobalInputBehavior()
     {
@@ -82,6 +83,30 @@ public partial class App : Application
             new KeyEventHandler(ComboBox_PreviewKeyDown));
         EventManager.RegisterClassHandler(typeof(Window), Mouse.PreviewMouseDownEvent,
             new MouseButtonEventHandler(Window_PreviewMouseDown));
+        EventManager.RegisterClassHandler(typeof(ToolTip), ToolTip.OpenedEvent,
+            new RoutedEventHandler(ToolTip_Opened));
+        EventManager.RegisterClassHandler(typeof(Window), Mouse.PreviewMouseMoveEvent,
+            new MouseEventHandler(Window_PreviewMouseMove));
+    }
+
+    // 当前打开的提示窗。ToolTip 的 IsHitTestVisible 已经是 false，鼠标移动事件仍然
+    // 发给下面的窗口，这里拿它来做「鼠标一动就收起」。
+    private static ToolTip? _openToolTip;
+    private static Point _toolTipAnchor;
+
+    private static void ToolTip_Opened(object sender, RoutedEventArgs e)
+    {
+        _openToolTip = sender as ToolTip;
+        _toolTipAnchor = Mouse.GetPosition(null);
+    }
+
+    private static void Window_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_openToolTip is null) return;
+        var pos = e.GetPosition(null);
+        if (Math.Abs(pos.X - _toolTipAnchor.X) + Math.Abs(pos.Y - _toolTipAnchor.Y) < 8) return;
+        _openToolTip.IsOpen = false;
+        _openToolTip = null;
     }
 
     private static void ComboBox_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -166,6 +191,11 @@ public partial class App : Application
             Directory.CreateDirectory(pics);
             for (int i = 1; i <= 3; i++) WriteTinyPng(Path.Combine(pics, $"{i}.png"), 40, 60, (byte)(i * 60), 90, 170);
 
+            // 竖排测试用：几张高图，保证一屏放不下、能真的滚动。
+            var verticalPics = Path.Combine(temp, "竖排测试");
+            Directory.CreateDirectory(verticalPics);
+            for (int i = 1; i <= 6; i++) WriteTinyPng(Path.Combine(verticalPics, $"{i}.png"), 800, 600, (byte)(i * 30), 120, 200);
+
             // 2 帧、每帧 100ms 的 8×8 动画 GIF（base64 直接写出来，避免测试依赖外部文件）。
             var gifPath = Path.Combine(temp, "动画.gif");
             File.WriteAllBytes(gifPath, Convert.FromBase64String(
@@ -199,6 +229,47 @@ public partial class App : Application
                     throw new InvalidOperationException("随机排序翻页出现重复条目");
 
                 StartupLog.Write($"自检 随机排序: 第一页 {page1.Count} 条、第二页 {page2.Count} 条，换种子顺序已变");
+            });
+
+            // 按图片数量排序：从多到少；带图的那个示例文件夹（3 张）应该排最前。
+            Try("按图片数量排序", () =>
+            {
+                var page = db!.SearchPage("", Array.Empty<long>(), true, SortMode.ImageCount, 0, 5, 0).Items;
+                if (page.Count == 0) throw new InvalidOperationException("没有结果");
+                for (var i = 1; i < page.Count; i++)
+                    if (page[i - 1].ImageCount < page[i].ImageCount)
+                        throw new InvalidOperationException("图片数量不是从多到少");
+                if (page[0].ImageCount != 3)
+                    throw new InvalidOperationException($"图片最多的应该是 3 张，实际 {page[0].ImageCount}");
+                StartupLog.Write($"自检 按图片数量排序: {string.Join("、", page.Select(x => $"{x.Name}={x.ImageCount}"))}");
+            });
+
+            // 作者自动成标签：目录名「甲{作者}{1,3}」最后一段是位置，中间那段是作者。
+            Try("作者自动成标签", () =>
+            {
+                var authorTags = db!.GetTags().Where(t => t.Category == TagCategory.Author).ToList();
+                if (authorTags.Count == 0) throw new InvalidOperationException("扫描后没有自动建立作者标签");
+                var folder = db!.SearchPage("甲", Array.Empty<long>(), true, SortMode.FavoriteOrder, 0, 1).Items.FirstOrDefault();
+                if (folder is null) throw new InvalidOperationException("找不到示例文件夹");
+                var names = db!.GetAssetTagNames(folder.Id);
+                if (!names.Contains("作者")) throw new InvalidOperationException("作者标签没有应用到作品上");
+                StartupLog.Write($"自检 作者自动成标签: {string.Join("、", authorTags.Select(t => t.Name))}，已挂到「{folder.Name}」");
+            });
+
+            // 标签组（分类）的显示顺序可调：SetCategoryOrder 之后 GetCategories / GetTags 都要跟着变。
+            Try("标签组排序可调", () =>
+            {
+                db!.EnsureCategory("排序测试一");
+                db!.EnsureCategory("排序测试二");
+                var before = db!.GetCategories();
+                if (before.Count < 2) throw new InvalidOperationException("至少需要两个分类才能验证排序");
+                var reversed = Enumerable.Reverse(before).ToList();
+                db!.SetCategoryOrder(reversed);
+                var after = db!.GetCategories();
+                if (!after.SequenceEqual(reversed))
+                    throw new InvalidOperationException($"分类顺序没有生效：期望 {string.Join("、", reversed)}，实际 {string.Join("、", after)}");
+                db!.SetCategoryOrder(before);
+                StartupLog.Write($"自检 标签组排序: {string.Join("、", after)}");
             });
 
             // GIF：扩展名列表要认它，WIC 解码要能拆出两帧。
@@ -381,6 +452,28 @@ public partial class App : Application
                 if (wheelOffset < 60) throw new InvalidOperationException($"滚轮没有滚动：{wheelOffset:0.0}px");
                 if (wheelOffset > 110) throw new InvalidOperationException($"滚轮步长仍然太大：{wheelOffset:0.0}px");
 
+                // 后台打开（Ctrl+左键 / 中键）：WindowState=Maximized 和 ShowActivated=false
+                // 是 WPF 明确禁止的组合，曾经直接抛异常。这里守着别回来。
+                try
+                {
+                    var viewerCountBefore = Application.Current.Windows.OfType<ImageViewerWindow>().Count();
+                    win.OpenInAppViewerForTest(pics, activate: false);
+                    await Task.Delay(400);
+                    var opened = Application.Current.Windows.OfType<ImageViewerWindow>().ToList();
+                    if (opened.Count != viewerCountBefore + 1)
+                        throw new InvalidOperationException($"后台打开应该新增 1 个看图窗口，实际 {opened.Count - viewerCountBefore}");
+                    var backgroundViewer = opened[^1];
+                    if (backgroundViewer.WindowState != WindowState.Maximized)
+                        throw new InvalidOperationException("后台打开没有全屏（应当最大化）");
+                    StartupLog.Write("自检 后台打开看图窗口: 通过（未抛异常、已最大化）");
+                    backgroundViewer.Close();
+                }
+                catch (Exception ex)
+                {
+                    failures++;
+                    StartupLog.Write($"自检 后台打开看图窗口: 失败 -> {ex.GetType().Name}: {ex.Message}");
+                }
+
                 win.Close();
             }
             catch (Exception ex)
@@ -465,7 +558,11 @@ public partial class App : Application
                 var files = FolderCover.ListImages(pics);
                 StartupLog.Write($"自检 看图窗口列出图片: {files.Count} 张");
                 if (files.Count != 3) throw new InvalidOperationException($"应该列出 3 张，实际 {files.Count}");
-                new ImageViewerWindow(pics).Close();
+                var viewer = new ImageViewerWindow(pics);
+                // 打开一律最大化。
+                if (viewer.WindowState != WindowState.Maximized)
+                    throw new InvalidOperationException($"看图窗口打开时应当最大化，实际 {viewer.WindowState}");
+                viewer.Close();
             });
 
             // 多开 + 不用 Owner：设了 Owner 的窗口永远盖在拥有者上面，Alt+Tab 切回工具窗口会被挡住，
@@ -654,9 +751,12 @@ public partial class App : Application
                         RoutedEvent = UIElement.MouseWheelEvent,
                     };
                     w.Viewport.RaiseEvent(wheel);
-                    await Task.Delay(50);
+                    await Task.Delay(400);
                     StartupLog.Write($"自检 滚轮缩放: scale={w.ZoomScaleForTest:0.00}");
                     if (w.ZoomScaleForTest <= 1.01) throw new InvalidOperationException("滚轮放大没有生效");
+                    // 线性放大：1 个 delta 单位 = 0.0015 倍，鼠标一格（120）= 0.18 倍。
+                    if (Math.Abs(w.ZoomScaleForTest - 1.18) > 0.001)
+                        throw new InvalidOperationException($"线性放大应当是 1.18 倍，实际 {w.ZoomScaleForTest:0.000}");
 
                     // 已有 offset 时（放大后再缩小）锚点必须仍然在同一屏幕位置。
                     var oldOffset = new Point(-80, -40);
@@ -751,10 +851,31 @@ public partial class App : Application
                     if (!w.DoublePageForTest) throw new InvalidOperationException("双页开关没有打开");
                     if (w.PictureRight.Source is null) throw new InvalidOperationException("双页右侧没有加载第二张图");
                     if (w.PictureRight.Visibility != Visibility.Visible) throw new InvalidOperationException("双页右侧图片没有显示");
+                    // 双页是整体的缩放容器，放大只会在视口里裁剪，不会两张图互相盖住。
+                    if (!w.Viewport.ClipToBounds)
+                        throw new InvalidOperationException("双页容器没有开启裁剪，放大会互相遮挡");
                     w.DoubleStepBox.SelectedIndex = 0;
                     if (w.DoubleStepForTest != 1) throw new InvalidOperationException("双页步长没有切到翻一张");
                     w.DoubleStepBox.SelectedIndex = 1;
                     if (w.DoubleStepForTest != 2) throw new InvalidOperationException("双页步长没有切到翻两张");
+
+                    // 双页左右间隔可以调到 0（两张图紧贴）。
+                    w.GapBox.Text = "0";
+                    await Task.Delay(100);
+                    if (w.Picture.Margin.Right != 0 || w.PictureRight.Margin.Left != 0)
+                        throw new InvalidOperationException($"双页间隔为 0 时中间仍有空隙：{w.Picture.Margin.Right}/{w.PictureRight.Margin.Left}");
+                    w.GapBox.Text = "20";
+                    await Task.Delay(100);
+                    if (Math.Abs(w.Picture.Margin.Right - 10) > 0.01)
+                        throw new InvalidOperationException($"双页间隔 20 时每边应是 10，实际 {w.Picture.Margin.Right}");
+
+                    // F11 全屏：藏边框；再按一次恢复。
+                    w.ToggleFullScreenForTest();
+                    if (w.WindowStyle != WindowStyle.None)
+                        throw new InvalidOperationException("F11 全屏后窗口边框没有去掉");
+                    w.ToggleFullScreenForTest();
+                    if (w.WindowStyle == WindowStyle.None)
+                        throw new InvalidOperationException("再按 F11 没有退出全屏");
                     w.DoublePageCheck.IsChecked = false;
                     await Task.Delay(200);
                     if (w.DoublePageForTest || w.PictureRight.Visibility != Visibility.Collapsed)
@@ -769,6 +890,140 @@ public partial class App : Application
                 StartupLog.Write($"自检 双页显示/步长: 失败 -> {ex.GetType().Name}: {ex.Message}");
             }
 
+            // 看图窗口的标签侧边栏：展开后按分类列出标签，勾选立即写库。
+            try
+            {
+                var w = new ImageViewerWindow(pics)
+                {
+                    WindowState = WindowState.Normal,
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    ShowActivated = false,
+                    ShowInTaskbar = false,
+                    Left = -20000,
+                    Top = -20000,
+                    Width = 640,
+                    Height = 420,
+                };
+                try
+                {
+                    w.Show();
+                    await Task.Delay(300);
+                    if (w.TagSidebarVisibleForTest) throw new InvalidOperationException("侧边栏默认不该是展开的");
+                    if (w.TagSidebarButton.Visibility != Visibility.Visible)
+                        throw new InvalidOperationException("收起时最左侧的「标签 ▸」把手应当可见");
+                    w.TagSidebarButton.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                    await Task.Delay(100);
+                    if (!w.TagSidebarVisibleForTest) throw new InvalidOperationException("点「标签」后侧边栏没有展开");
+                    if (w.TagSidebarButton.Visibility != Visibility.Collapsed)
+                        throw new InvalidOperationException("展开侧边栏后把手应当隐藏");
+
+                    var boxes = Descendants<CheckBox>(w.TagSidebarPanel).ToList();
+                    if (boxes.Count == 0) throw new InvalidOperationException("侧边栏里没有标签可选");
+                    if (!Descendants<TextBlock>(w.TagSidebarPanel).Any(t => t.Text == "▶ " + TagCategory.Author))
+                        throw new InvalidOperationException("作者标签组没有默认折叠");
+                    var first = boxes[0];
+                    var tagName = first.Content as string ?? "";
+                    first.IsChecked = true;
+                    await Task.Delay(50);
+
+                    var assetId = db!.GetAssetIdByPath(pics);
+                    if (assetId is null) throw new InvalidOperationException("测试文件夹不在索引里");
+                    if (!db!.GetAssetTagNames(assetId.Value).Contains(tagName))
+                        throw new InvalidOperationException($"勾选「{tagName}」后没有立即写入数据库");
+                    StartupLog.Write($"自检 看图标签侧边栏: {boxes.Count} 个标签，勾选「{tagName}」已即时写入");
+                }
+                finally { if (w.IsVisible) w.Close(); }
+            }
+            catch (Exception ex)
+            {
+                failures++;
+                StartupLog.Write($"自检 看图标签侧边栏: 失败 -> {ex.GetType().Name}: {ex.Message}");
+            }
+
+            // 提示窗不参与鼠标交互：它悬在画面上时滚轮要能照常落到下面的窗口。
+            Try("提示窗不参与鼠标交互", () =>
+            {
+                if (Application.Current.Resources[typeof(ToolTip)] is not Style style)
+                    throw new InvalidOperationException("没有 ToolTip 的隐式样式");
+                var setter = style.Setters.OfType<Setter>()
+                    .FirstOrDefault(s => s.Property == UIElement.IsHitTestVisibleProperty);
+                if (setter?.Value is not false)
+                    throw new InvalidOperationException("ToolTip 的 IsHitTestVisible 不是 false，会挡住滚轮");
+            });
+
+            // 竖排：全部图片排成一列向下滚，自动翻页变成自动下滑。
+            try
+            {
+                var w = new ImageViewerWindow(verticalPics)
+                {
+                    WindowState = WindowState.Normal,
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    ShowActivated = false,
+                    ShowInTaskbar = false,
+                    Left = -20000,
+                    Top = -20000,
+                    Width = 900,
+                    Height = 420,
+                };
+                try
+                {
+                    w.Show();
+                    await Task.Delay(300);
+                    w.VerticalModeCheck.IsChecked = true;
+                    await Task.Delay(800);
+                    if (!w.VerticalModeForTest) throw new InvalidOperationException("竖排开关没有打开");
+                    if (w.VerticalImageCountForTest != 6)
+                        throw new InvalidOperationException($"竖排应该有 6 张图，实际 {w.VerticalImageCountForTest}");
+
+                    w.GapBox.Text = "40";
+                    await Task.Delay(100);
+                    if (Math.Abs(w.GapForTest - 40) > 0.01)
+                        throw new InvalidOperationException($"间隔没有生效：{w.GapForTest}");
+
+                    // 竖排放大倍率（Ctrl+滚轮走的就是这条路径）。
+                    w.SetVerticalZoomForTest(2);
+                    await Task.Delay(100);
+                    if (Math.Abs(w.VerticalZoomForTest - 2) > 0.01)
+                        throw new InvalidOperationException($"竖排缩放没有生效：{w.VerticalZoomForTest}");
+
+                    // 竖排时上方输入框是下滑速度（px/s），不再是秒。
+                    w.IntervalBox.Text = "500";
+                    await Task.Delay(100);
+                    if (Math.Abs(w.ScrollSpeedForTest - 500) > 0.01)
+                        throw new InvalidOperationException($"竖排下滑速度没有生效：{w.ScrollSpeedForTest}");
+
+                    if (w.VerticalViewer.ScrollableHeight <= 0)
+                        throw new InvalidOperationException("竖排内容没有超出一屏，测不了滚动");
+
+                    w.IntervalBox.Text = "900";
+                    w.AutoPageCheck.IsChecked = true;
+                    await Task.Delay(500);
+                    var scrolled = w.VerticalViewer.VerticalOffset;
+                    w.AutoPageCheck.IsChecked = false;
+                    if (scrolled <= 0) throw new InvalidOperationException("自动下滑没有滚动");
+
+                    // 退出竖排要回到进入前的布局：先双页 → 进竖排 → 退出，应该还是双页。
+                    w.VerticalModeCheck.IsChecked = false;
+                    await Task.Delay(300);
+                    w.DoublePageCheck.IsChecked = true;
+                    await Task.Delay(300);
+                    w.VerticalModeCheck.IsChecked = true;
+                    await Task.Delay(300);
+                    w.VerticalModeCheck.IsChecked = false;
+                    await Task.Delay(300);
+                    if (!w.DoublePageForTest)
+                        throw new InvalidOperationException("退出竖排没有回到进入前的双页模式");
+
+                    StartupLog.Write($"自检 竖排显示/自动下滑: 6 张，间隔 {w.GapForTest:0}px，下滑 {scrolled:0}px");
+                }
+                finally { if (w.IsVisible) w.Close(); }
+            }
+            catch (Exception ex)
+            {
+                failures++;
+                StartupLog.Write($"自检 竖排显示/自动下滑: 失败 -> {ex.GetType().Name}: {ex.Message}");
+            }
+
             // 三个标签窗口都必须是独立顶层窗口：不设 Owner，否则会挡住主窗口，翻页按钮点不到。
             Try("TagManagerWindow", () =>
             {
@@ -777,9 +1032,47 @@ public partial class App : Application
                 {
                     if (w.Owner is not null) throw new InvalidOperationException("标签管理窗口不应设置 Owner");
                     if (!w.ShowInTaskbar) throw new InvalidOperationException("标签管理窗口应出现在任务栏");
+                    if (w.AutoApplyCheck.IsChecked != true) throw new InvalidOperationException("自动应用默认应当是开启的");
                 }
                 finally { w.Close(); }
             });
+            // 标签管理的自动应用：改个名字、不点保存，停顿后应该已经写进库。
+            try
+            {
+                var w = new TagManagerWindow(db!)
+                {
+                    ShowInTaskbar = false,
+                    ShowActivated = false,
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Left = -20000,
+                    Top = -20000,
+                };
+                try
+                {
+                    w.Show();
+                    await Task.Delay(200);
+                    var box = Descendants<TextBox>(w).FirstOrDefault(t => t.Text.Trim().Length > 0);
+                    if (box is null) throw new InvalidOperationException("列表里没有标签输入框");
+                    var original = box.Text.Trim();
+                    var renamed = original + "-自动";
+                    box.Text = renamed;
+                    await Task.Delay(900);
+                    if (!db!.GetTags().Any(t => t.Name == renamed))
+                        throw new InvalidOperationException("改动没有自动写入数据库");
+                    box.Text = original;
+                    await Task.Delay(900);
+                    if (!db!.GetTags().Any(t => t.Name == original))
+                        throw new InvalidOperationException("还原名字失败");
+                    StartupLog.Write($"自检 标签管理自动应用: 「{original}」→「{renamed}」已自动落库");
+                }
+                finally { if (w.IsVisible) w.Close(); }
+            }
+            catch (Exception ex)
+            {
+                failures++;
+                StartupLog.Write($"自检 标签管理自动应用: 失败 -> {ex.GetType().Name}: {ex.Message}");
+            }
+
             Try("TagPickerWindow", () =>
             {
                 var w = new TagPickerWindow(db!, sample.Take(2).ToList());

@@ -10,13 +10,14 @@
    <Button Content="导出清单" Click="Export_Click" ToolTip="把当前筛选出的文件夹名称导出成文本清单"/>
    <Button Content="库另存为…" Click="BackupLibrary_Click" ToolTip="把标签和文件夹列表另存为 JSON 文档；不包含图片，也不会移动磁盘文件"/>
    <Button Content="读取库…" Click="RestoreLibrary_Click" ToolTip="从 JSON 文档恢复标签和文件夹列表（合并到当前库，不清空）"/>
+   <Button Content="清理日志" Click="CleanLog_Click" ToolTip="清空启动日志文件；不影响索引和标签"/>
    <Button x:Name="ThemeButton" DockPanel.Dock="Right" Content="深色模式" Click="Theme_Click" ToolTip="在浅色与深色之间切换"/>
   </DockPanel>
   <Border Grid.Row="1" Background="{DynamicResource Brush.Surface}" CornerRadius="10" Padding="10" Margin="0,0,0,12" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
     <TextBox x:Name="SearchBox" Grid.Column="0" Margin="3" VerticalContentAlignment="Center" ToolTip="按文件夹名、路径、作品编号或作者搜索" KeyDown="SearchBox_KeyDown"/>
     <ComboBox x:Name="MatchBox" Grid.Column="1" Width="90" Margin="3" SelectedIndex="0"><ComboBoxItem Content="AND 全部"/><ComboBoxItem Content="OR 任意"/></ComboBox>
-    <ComboBox x:Name="SortBox" Grid.Column="2" Width="190" Margin="3" SelectionChanged="Sort_Changed" DropDownOpened="SortBox_DropDownOpened" DropDownClosed="SortBox_DropDownClosed" ToolTip="结果排序方式；选「随机」每次都会重新打乱"><ComboBoxItem Content="结尾 {页数,位置}"/><ComboBoxItem Content="结尾 {页数,位置} 倒序"/><ComboBoxItem Content="首字母 A→Z"/><ComboBoxItem Content="首字母 Z→A"/><ComboBoxItem Content="识别文件 GlobalIndex"/><ComboBoxItem Content="随机"/></ComboBox>
+    <ComboBox x:Name="SortBox" Grid.Column="2" Width="190" Margin="3" SelectionChanged="Sort_Changed" DropDownOpened="SortBox_DropDownOpened" DropDownClosed="SortBox_DropDownClosed" ToolTip="结果排序方式；选「随机」每次都会重新打乱"><ComboBoxItem Content="结尾 {页数,位置}"/><ComboBoxItem Content="结尾 {页数,位置} 倒序"/><ComboBoxItem Content="首字母 A→Z"/><ComboBoxItem Content="首字母 Z→A"/><ComboBoxItem Content="识别文件 GlobalIndex"/><ComboBoxItem Content="按图片数量"/><ComboBoxItem Content="随机"/></ComboBox>
     <Button Grid.Column="3" Content="搜索" Click="Search_Click"/>
     <Button Grid.Column="4" Content="清除筛选" Click="Clear_Click"/>
    </Grid>
@@ -70,7 +71,7 @@
          <RowDefinition Height="70"/>
          <RowDefinition Height="40"/>
         </Grid.RowDefinitions>
-        <Border Grid.Row="0" Cursor="Hand" MouseLeftButtonUp="Cover_Click" Tag="{Binding Path}" Background="{DynamicResource Brush.Soft}" CornerRadius="6" ClipToBounds="True" ToolTip="点击在工具内看图，左右方向键翻页">
+        <Border Grid.Row="0" Cursor="Hand" MouseLeftButtonUp="Cover_Click" MouseDown="Cover_MouseDown" Tag="{Binding Path}" Background="{DynamicResource Brush.Soft}" CornerRadius="6" ClipToBounds="True" ToolTip="点击在工具内看图，左右方向键翻页">
          <Grid>
           <Image Source="{Binding ThumbnailPath}" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"/>
           <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="5" Padding="3,1" CornerRadius="4" Opacity="0.92" Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">

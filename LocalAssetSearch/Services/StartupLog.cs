@@ -46,4 +46,25 @@ public static class StartupLog
         }
         catch { /* 日志本身绝不能把程序拖垮 */ }
     }
+
+    /// <summary>清空日志文件，返回清掉之前的大小（字节）。清理动作本身留一行记录。</summary>
+    public static long Clear()
+    {
+        lock (Gate)
+        {
+            try
+            {
+                long size = 0;
+                if (File.Exists(LogPath))
+                {
+                    size = new FileInfo(LogPath).Length;
+                    File.Delete(LogPath);
+                }
+                File.AppendAllText(LogPath,
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 日志已手动清理（清理前 {size / 1024.0:0.0} KB）{Environment.NewLine}");
+                return size;
+            }
+            catch { return 0; }
+        }
+    }
 }

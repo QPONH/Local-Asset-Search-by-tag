@@ -29,6 +29,17 @@ public static class FolderCover
         catch { return new List<string>(); }
     }
 
+    /// <summary>只数图片数量（不排序、不找封面），「按图片数量」排序用。</summary>
+    public static int CountImages(string folderPath)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(folderPath)
+                .Count(p => ImageExtensions.Contains(Path.GetExtension(p)));
+        }
+        catch { return 0; }
+    }
+
     /// <summary>
     /// 一次列出目录，同时给出封面文件和图片总数。
     /// 卡片既要封面又要数量，分两次调用会把同一个目录列两遍，这里合并掉。

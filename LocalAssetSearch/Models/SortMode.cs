@@ -18,6 +18,9 @@ public enum SortMode
     /// <summary>按 work-id.json 里的 GlobalIndex 升序，没有识别文件的排最后。</summary>
     GlobalIndex,
 
+    /// <summary>按文件夹里的图片数量从多到少；没有图片的排最后。</summary>
+    ImageCount,
+
     /// <summary>随机顺序。每次选中都会换一个种子重新打乱；同一个种子下分页顺序保持不变。</summary>
     Random,
 }

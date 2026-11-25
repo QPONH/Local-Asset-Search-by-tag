@@ -5,6 +5,9 @@ public static class TagCategory
 {
     public const string Unclassified = "未分类";
 
+    /// <summary>从目录名 / work-id.json 自动识别出来的作者标签统一放这个分类。</summary>
+    public const string Author = "作者";
+
     /// <summary>把“未分类”统一成空字符串；其他值去首尾空格。</summary>
     public static string Normalize(string? text)
     {

@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS Assets(
 CREATE INDEX IF NOT EXISTS IX_Assets_ParentPath ON Assets(ParentPath);
 CREATE INDEX IF NOT EXISTS IX_Assets_Name ON Assets(Name);
 CREATE TABLE IF NOT EXISTS Tags(Id INTEGER PRIMARY KEY, Name TEXT NOT NULL UNIQUE COLLATE NOCASE, Color TEXT NOT NULL DEFAULT '#64748b', Category TEXT NOT NULL DEFAULT '');
-CREATE TABLE IF NOT EXISTS Categories(Id INTEGER PRIMARY KEY, Name TEXT NOT NULL UNIQUE COLLATE NOCASE);
+CREATE TABLE IF NOT EXISTS Categories(Id INTEGER PRIMARY KEY, Name TEXT NOT NULL UNIQUE COLLATE NOCASE, SortOrder INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS AssetTags(AssetId INTEGER NOT NULL REFERENCES Assets(Id) ON DELETE CASCADE, TagId INTEGER NOT NULL REFERENCES Tags(Id) ON DELETE CASCADE, PRIMARY KEY(AssetId,TagId));
 CREATE TABLE IF NOT EXISTS Groups(Id INTEGER PRIMARY KEY, Name TEXT NOT NULL UNIQUE COLLATE NOCASE);
 CREATE TABLE IF NOT EXISTS GroupAssets(GroupId INTEGER NOT NULL REFERENCES Groups(Id) ON DELETE CASCADE, AssetId INTEGER NOT NULL REFERENCES Assets(Id) ON DELETE CASCADE, PRIMARY KEY(GroupId,AssetId));
@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS HiddenPaths(Path TEXT NOT NULL PRIMARY KEY);";
         MigrateTagCategoryColumn(c);
         MigrateSortColumns(c);
         MigrateWorkMetadataColumns(c);
+        MigrateCategoryOrderColumn(c);
         SeedCategories(c);
         using (var pragma = c.CreateCommand()) { pragma.CommandText = "PRAGMA foreign_keys=ON;"; pragma.ExecuteNonQuery(); }
     }
@@ -176,8 +177,23 @@ CREATE INDEX IF NOT EXISTS IX_Assets_Name ON Assets(Name);";
         cmd.ExecuteNonQuery();
     }
 
-    private static void MigrateTagCategoryColumn(SqliteConnection c)
+    /// <summary>分类的显示顺序（标签组排序）。老库没有 SortOrder 列，补一个默认 0。</summary>
+    private static void MigrateCategoryOrderColumn(SqliteConnection c)
     {
+        bool hasOrder = false;
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText = "PRAGMA table_info(Categories)";
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) if (string.Equals(r.GetString(1), "SortOrder", StringComparison.OrdinalIgnoreCase)) { hasOrder = true; break; }
+        }
+        if (hasOrder) return;
+        using var alter = c.CreateCommand();
+        alter.CommandText = "ALTER TABLE Categories ADD COLUMN SortOrder INTEGER NOT NULL DEFAULT 0";
+        alter.ExecuteNonQuery();
+    }
+
+    private static void MigrateTagCategoryColumn(SqliteConnection c)    {
         bool hasCategory = false;
         using (var cmd = c.CreateCommand())
         {
@@ -426,7 +442,49 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
             idCmd.Transaction = tx;
             idCmd.CommandText = "SELECT Id FROM Assets WHERE Path=$p";
             idCmd.Parameters.AddWithValue("$p", path);
-            CopyTagsByWorkId(c, tx, Convert.ToInt64(idCmd.ExecuteScalar()), workId);
+            var assetId = Convert.ToInt64(idCmd.ExecuteScalar());
+            CopyTagsByWorkId(c, tx, assetId, workId);
+            if (kind == "folder") ApplyAuthorTags(c, tx, assetId, meta, name);
+        }
+
+        /// <summary>
+        /// 作者自动成标签：优先用 work-id.json 的 Authors，没有就按目录名
+        /// 「作品名{作者a}{作者b}{收藏夹位置}」解析出作者段。作者标签统一放进「作者」分类并挂到作品上。
+        /// </summary>
+        static void ApplyAuthorTags(SqliteConnection c, SqliteTransaction tx, long assetId, WorkMetadata? meta, string folderName)
+        {
+            var authors = meta is { Authors.Count: > 0 }
+                ? meta.Authors.ToList()
+                : FavoriteOrder.AuthorsOf(folderName);
+            if (authors.Count == 0) return;
+
+            foreach (var raw in authors)
+            {
+                var author = raw.Trim();
+                if (author.Length == 0) continue;
+
+                using var ensure = c.CreateCommand();
+                ensure.Transaction = tx;
+                ensure.CommandText = @"INSERT INTO Tags(Name, Category) VALUES($n, $cat)
+ON CONFLICT(Name) DO UPDATE SET Category = CASE WHEN Tags.Category = '' THEN $cat ELSE Tags.Category END;
+SELECT Id FROM Tags WHERE Name = $n COLLATE NOCASE;";
+                ensure.Parameters.AddWithValue("$n", author);
+                ensure.Parameters.AddWithValue("$cat", TagCategory.Author);
+                var tagId = Convert.ToInt64(ensure.ExecuteScalar());
+
+                using var link = c.CreateCommand();
+                link.Transaction = tx;
+                link.CommandText = "INSERT OR IGNORE INTO AssetTags(AssetId, TagId) VALUES($a, $t)";
+                link.Parameters.AddWithValue("$a", assetId);
+                link.Parameters.AddWithValue("$t", tagId);
+                link.ExecuteNonQuery();
+            }
+
+            using var category = c.CreateCommand();
+            category.Transaction = tx;
+            category.CommandText = "INSERT OR IGNORE INTO Categories(Name) VALUES($cat)";
+            category.Parameters.AddWithValue("$cat", TagCategory.Author);
+            category.ExecuteNonQuery();
         }
         var stack = new Stack<string>(); stack.Push(root.TrimEnd(Path.DirectorySeparatorChar)); int folderCount=0;
         while(stack.Count>0)
@@ -512,7 +570,8 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
         cmd.CommandText=@"SELECT t.Id, t.Name, t.Category,
  (SELECT COUNT(*) FROM AssetTags at WHERE at.TagId=t.Id)
  FROM Tags t
- ORDER BY CASE WHEN TRIM(t.Category)='' THEN 1 ELSE 0 END, t.Category COLLATE NOCASE, t.Name COLLATE NOCASE";
+ LEFT JOIN Categories c ON c.Name = TRIM(t.Category) COLLATE NOCASE
+ ORDER BY CASE WHEN TRIM(t.Category)='' THEN 1 ELSE 0 END, COALESCE(c.SortOrder, 0), t.Category COLLATE NOCASE, t.Name COLLATE NOCASE";
         using var r=cmd.ExecuteReader();
         var list=new List<TagInfo>();
         while(r.Read()) list.Add(new TagInfo{ Id=r.GetInt64(0), Name=r.GetString(1), Category=r.GetString(2), UsageCount=r.GetInt32(3) });
@@ -544,21 +603,52 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
     public List<string> GetCategories()
     {
         using var c = Open();
-        using var cmd = c.CreateCommand();
-        // 老库的 Categories 可能还没补齐，所以把 Tags.Category 也并进来。
-        cmd.CommandText = @"SELECT Name FROM Categories
-                            UNION
-                            SELECT DISTINCT TRIM(Category) FROM Tags WHERE TRIM(Category) <> ''
-                            ORDER BY Name COLLATE NOCASE";
-        using var r = cmd.ExecuteReader();
-        var result = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        while (r.Read())
+        // 顺序优先用 Categories.SortOrder；老库或只有 Tags.Category 的分类按 0 处理，再按名称排。
+        var order = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        using (var cmd = c.CreateCommand())
         {
-            var name = r.GetString(0).Trim();
-            if (name.Length > 0 && seen.Add(name)) result.Add(name);
+            cmd.CommandText = "SELECT Name, SortOrder FROM Categories";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var name = r.GetString(0).Trim();
+                if (name.Length > 0) order[name] = r.GetInt32(1);
+            }
         }
-        return result;
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText = "SELECT DISTINCT TRIM(Category) FROM Tags WHERE TRIM(Category) <> ''";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var name = r.GetString(0).Trim();
+                if (name.Length > 0 && !order.ContainsKey(name)) order[name] = 0;
+            }
+        }
+        return order.Keys
+            .OrderBy(name => order[name])
+            .ThenBy(name => name, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>按给定顺序重写分类的 SortOrder（标签组排序）。</summary>
+    public void SetCategoryOrder(IReadOnlyList<string> names)
+    {
+        using var c = Open();
+        using var tx = c.BeginTransaction();
+        for (var i = 0; i < names.Count; i++)
+        {
+            var name = (names[i] ?? "").Trim();
+            if (name.Length == 0) continue;
+            using var cmd = c.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = @"INSERT INTO Categories(Name, SortOrder) VALUES($n, $o)
+ON CONFLICT(Name) DO UPDATE SET SortOrder = $o";
+            cmd.Parameters.AddWithValue("$n", name);
+            cmd.Parameters.AddWithValue("$o", i);
+            cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
     }
 
     /// <summary>先建一个分类；标签本身仍然只引用分类名，不强制先建后用。</summary>
@@ -620,8 +710,31 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
     /// 读出所有打过标签的条目：键为 AssetId，值为标签名（已按名称排序）。
     /// 结果卡片的标签芯片、以及标签对话框里「这个素材已有哪些标签」都靠它。
     /// </summary>
-    public Dictionary<long,List<string>> GetAllAssetTags()
+    /// <summary>按路径找索引里的条目 Id；没索引过返回 null。</summary>
+    public long? GetAssetIdByPath(string path)
     {
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT Id FROM Assets WHERE Path=$p LIMIT 1";
+        cmd.Parameters.AddWithValue("$p", path);
+        var value = cmd.ExecuteScalar();
+        return value is null or DBNull ? null : Convert.ToInt64(value);
+    }
+
+    /// <summary>某个条目当前的标签名集合（用于看图窗口侧边栏的初始勾选状态）。</summary>
+    public HashSet<string> GetAssetTagNames(long assetId)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT t.Name FROM AssetTags at JOIN Tags t ON t.Id=at.TagId WHERE at.AssetId=$a";
+        cmd.Parameters.AddWithValue("$a", assetId);
+        using var r = cmd.ExecuteReader();
+        while (r.Read()) names.Add(r.GetString(0));
+        return names;
+    }
+
+    public Dictionary<long,List<string>> GetAllAssetTags()    {
         using var c=Open(); using var cmd=c.CreateCommand();
         cmd.CommandText="SELECT at.AssetId, t.Name FROM AssetTags at JOIN Tags t ON t.Id=at.TagId ORDER BY t.Name COLLATE NOCASE";
         using var r=cmd.ExecuteReader();
@@ -671,11 +784,12 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
         {
             // 随机排序不交给 SQL：SQLite 没有可播种的随机函数，用 Id 做线性变换仍是单调的，
             // 换种子也看不出区别。这里整取后在内存里按种子洗牌，再切出这一页。
-            cmd.CommandText = sort == SortMode.Random
+            // 按图片数量排序同理：数量不在库里（扫描时不数），只能整取后现场数。
+            cmd.CommandText = sort is SortMode.Random or SortMode.ImageCount
                 ? $"SELECT a.Id,a.Path,a.Name,a.Kind,a.Size,a.ModifiedUtc FROM Assets a WHERE {whereSql}"
                 : $"SELECT a.Id,a.Path,a.Name,a.Kind,a.Size,a.ModifiedUtc FROM Assets a WHERE {whereSql} {OrderByClause(sort)} LIMIT $limit OFFSET $offset";
             foreach(var (n,v) in args) cmd.Parameters.AddWithValue(n,v);
-            if (sort != SortMode.Random)
+            if (sort is not (SortMode.Random or SortMode.ImageCount))
             {
                 cmd.Parameters.AddWithValue("$limit",limit);
                 cmd.Parameters.AddWithValue("$offset",offset);
@@ -687,6 +801,15 @@ ON CONFLICT(Path) DO UPDATE SET ParentPath=excluded.ParentPath,Name=excluded.Nam
         {
             Shuffle(result, randomSeed);
             result = result.Skip(offset).Take(limit).ToList();
+        }
+        else if (sort == SortMode.ImageCount)
+        {
+            foreach (var item in result)
+                item.ImageCount = item.Kind == "folder" ? FolderCover.CountImages(item.Path) : 0;
+            result = result
+                .OrderByDescending(i => i.ImageCount)
+                .ThenBy(i => i.Name, StringComparer.CurrentCultureIgnoreCase)
+                .Skip(offset).Take(limit).ToList();
         }
         if(result.Count>0){ var tagMap=GetAllAssetTags(); foreach(var item in result) if(tagMap.TryGetValue(item.Id,out var names)) item.Tags=names; }
         return (result, total);

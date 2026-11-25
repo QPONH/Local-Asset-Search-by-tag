@@ -26,8 +26,7 @@ public partial class TagPickerWindow : Window
 
     private sealed class TagGroup
     {
-        public Grid Header = null!;
-        public TextBlock HeaderText = null!;
+        public CollapsibleGroup Group = null!;
         public WrapPanel Panel = null!;
         public List<(CheckBox Box, string Name)> Items { get; } = new();
     }
@@ -92,13 +91,11 @@ public partial class TagPickerWindow : Window
             if (!string.Equals(tag.CategoryLabel, currentCategory, StringComparison.OrdinalIgnoreCase))
             {
                 currentCategory = tag.CategoryLabel;
-                var header = TagHeader.Create(currentCategory);
-                TagPanel.Children.Add(header.Root);
 
                 // 一般标签最多四个字，排得密一点：窗口宽度下能放六列。
                 var wrap = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = 110 };
-                TagPanel.Children.Add(wrap);
-                group = new TagGroup { Header = header.Root, HeaderText = header.Text, Panel = wrap };
+                var collapsible = TagGroupView.AddCollapsible(TagPanel, currentCategory, TagGroupView.IsAuthorGroup(currentCategory), wrap);
+                group = new TagGroup { Group = collapsible, Panel = wrap };
                 _groups.Add(group);
             }
 
@@ -185,7 +182,7 @@ public partial class TagPickerWindow : Window
         var q = FilterBox.Text.Trim();
         foreach (var group in _groups)
         {
-            var groupMatch = q.Length == 0 || group.HeaderText.Text.Contains(q, StringComparison.OrdinalIgnoreCase);
+            var groupMatch = q.Length == 0 || group.Group.Title.Contains(q, StringComparison.OrdinalIgnoreCase);
             var visible = 0;
             foreach (var (box, name) in group.Items)
             {
@@ -194,8 +191,20 @@ public partial class TagPickerWindow : Window
                 if (show) visible++;
             }
             var showGroup = q.Length == 0 || visible > 0;
-            group.Header.Visibility = showGroup ? Visibility.Visible : Visibility.Collapsed;
-            group.Panel.Visibility = showGroup ? Visibility.Visible : Visibility.Collapsed;
+            group.Group.Header.Visibility = showGroup ? Visibility.Visible : Visibility.Collapsed;
+            if (!showGroup)
+            {
+                group.Group.Content.Visibility = Visibility.Collapsed;
+            }
+            else if (q.Length > 0)
+            {
+                // 过滤时展开有匹配的组，否则搜索结果被折叠藏起来。
+                group.Group.SetCollapsed(false);
+            }
+            else
+            {
+                group.Group.Content.Visibility = group.Group.Collapsed ? Visibility.Collapsed : Visibility.Visible;
+            }
         }
     }
 

@@ -616,7 +616,7 @@ INSERT INTO AssetTags(AssetId,TagId) VALUES (1,1),(2,1),(3,1),(3,2);";
         // 扫描根目录本身也会入库，所以导出里是「根 + 甲 + 乙」3 个；丙已从库里删除，只剩隐藏记录。
         var doc = LibraryArchive.Export(db1);
         Check(doc.Folders.Count == 3, "导出 3 个仍在库里的文件夹（根 + 甲 + 乙）", $"{doc.Folders.Count}");
-        Check(doc.Tags.Count == 3, "导出 3 个标签（含未使用的）", $"{doc.Tags.Count}");
+        Check(doc.Tags.Count == 4, "导出 4 个标签（含未使用 + 自动作者）", $"{doc.Tags.Count}");
         Check(doc.HiddenPaths.Count == 1, "导出 1 条隐藏路径", $"{doc.HiddenPaths.Count}");
 
         var file = Path.Combine(root, "备份.laslib.json");
@@ -630,13 +630,13 @@ INSERT INTO AssetTags(AssetId,TagId) VALUES (1,1),(2,1),(3,1),(3,2);";
         var db2 = new Database(Path.Combine(root, "db-archive-2"));
         var result = LibraryArchive.Import(db2, loaded);
         Check(result.FoldersAdded == 3, "新库导入 3 个文件夹", $"{result.FoldersAdded}");
-        Check(result.TagsAdded == 3, "新库导入 3 个标签", $"{result.TagsAdded}");
-        Check(result.LinksAdded == 3, "新库恢复 3 条标签关联", $"{result.LinksAdded}");
+        Check(result.TagsAdded == 4, "新库导入 4 个标签", $"{result.TagsAdded}");
+        Check(result.LinksAdded == 5, "新库恢复 5 条标签关联", $"{result.LinksAdded}");
         Check(result.HiddenAdded == 1, "新库恢复 1 条隐藏路径", $"{result.HiddenAdded}");
 
         // SearchPage 才会把标签填进 AssetItem；GetFolders 不带标签。
         var restoredA = db2.Search("甲", Array.Empty<long>(), true).First();
-        Check(new HashSet<string>(restoredA.Tags).SetEquals(new[] { "人像", "风景" }),
+        Check(new HashSet<string>(restoredA.Tags).SetEquals(new[] { "人像", "风景", "a" }),
               "标签关联恢复正确", string.Join("、", restoredA.Tags));
         Check(db2.GetHiddenCount() == 1, "隐藏列表恢复正确", $"{db2.GetHiddenCount()}");
         Check(db2.Search("", Array.Empty<long>(), true).All(i => !i.Name.StartsWith("丙")), "已隐藏的文件夹不会出现在结果里");

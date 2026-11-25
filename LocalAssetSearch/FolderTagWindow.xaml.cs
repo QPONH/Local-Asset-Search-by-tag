@@ -87,10 +87,9 @@ public partial class FolderTagWindow : Window
             if (!string.Equals(tag.CategoryLabel, currentCategory, StringComparison.OrdinalIgnoreCase))
             {
                 currentCategory = tag.CategoryLabel;
-                TagTogglePanel.Children.Add(TagHeader.Create(currentCategory).Root);
                 // 四个字的标签排三列，右侧栏不浪费横向空间。
                 columnPanel = new WrapPanel { Orientation = Orientation.Horizontal, ItemWidth = 100 };
-                TagTogglePanel.Children.Add(columnPanel);
+                TagGroupView.AddCollapsible(TagTogglePanel, currentCategory, TagGroupView.IsAuthorGroup(currentCategory), columnPanel);
             }
 
             _tagNameById[tag.Id] = tag.Name;

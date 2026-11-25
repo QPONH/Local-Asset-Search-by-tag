@@ -22,6 +22,10 @@ public partial class TagManagerWindow : Window
     private bool _dirty;
     private bool _saved;
 
+    // 自动应用：改动停下 600ms 后自动写库，不用点「保存」。开关存在 settings.ini，全局生效。
+    private readonly System.Windows.Threading.DispatcherTimer _autoSaveTimer = new();
+    private bool _autoApply;
+
     /// <summary>关窗后主窗口据此决定要不要刷新标签和结果。</summary>
     public bool Changed { get; private set; }
 
@@ -41,9 +45,49 @@ public partial class TagManagerWindow : Window
         InitializeComponent();
         WindowSizeStore.Restore(this, "tagManager");
         WindowSizeStore.Track(this, "tagManager");
+        _autoApply = Settings.Get("tags.autoApply", "1") == "1";
         ReloadCategories();
         BuildRows();
+
+        _building = true;
+        AutoApplyCheck.IsChecked = _autoApply;
+        _building = false;
+        _autoSaveTimer.Interval = TimeSpan.FromMilliseconds(600);
+        _autoSaveTimer.Tick += (_, _) =>
+        {
+            _autoSaveTimer.Stop();
+            ApplyChanges(closeAfter: false, interactive: false);
+        };
+
         Closing += OnClosing;
+    }
+
+    private void AutoApply_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_building) return;
+        _autoApply = AutoApplyCheck.IsChecked == true;
+        Settings.Set("tags.autoApply", _autoApply ? "1" : "0");
+        if (_autoApply && _dirty)
+        {
+            _autoSaveTimer.Stop();
+            _autoSaveTimer.Start();
+        }
+        else
+        {
+            _autoSaveTimer.Stop();
+        }
+        StatusText.Text = _autoApply
+            ? "已开启自动应用：改动停顿片刻后自动写入。"
+            : "已关闭自动应用：点「保存」或关窗时写入。";
+    }
+
+    private void CategoryOrder_Click(object sender, RoutedEventArgs e)
+    {
+        var w = new CategoryOrderWindow(_db) { Owner = this };
+        w.ShowDialog();
+        ReloadCategories();
+        RefreshCategoryChoices();
+        StatusText.Text = "分类顺序已更新。";
     }
 
     private void ReloadCategories()
@@ -100,7 +144,9 @@ public partial class TagManagerWindow : Window
             }
         }
         finally { _building = false; }
-        StatusText.Text = "改动先留在窗口里，点右下角「保存」统一写入。";
+        StatusText.Text = _autoApply
+            ? "修改会自动写入；点「保存」立即写入并关闭。"
+            : "改动先留在窗口里，点右下角「保存」统一写入。";
     }
 
     private void AddRow(TagInfo? tag, string? draftName = null, string? draftCategory = null)
@@ -176,6 +222,10 @@ public partial class TagManagerWindow : Window
     {
         if (_building || _saved) return;
         _dirty = true;
+        if (!_autoApply) return;
+        // 连续输入时只保留最后一次，停顿 600ms 再写库。
+        _autoSaveTimer.Stop();
+        _autoSaveTimer.Start();
     }
 
     private void ToggleDelete(TagRow row)
@@ -235,7 +285,13 @@ public partial class TagManagerWindow : Window
         StatusText.Text = $"已新增分类「{name}」到列表，点「保存」后生效。";
     }
 
-    private void Save_Click(object sender, RoutedEventArgs e)
+    private void Save_Click(object sender, RoutedEventArgs e) => ApplyChanges(closeAfter: true, interactive: true);
+
+    /// <summary>
+    /// 把窗口里的改动写进数据库。interactive 时校验失败弹对话框；
+    /// 自动应用（定时器 / 关窗刷新）时只在状态栏提示，不打断输入。
+    /// </summary>
+    private bool ApplyChanges(bool closeAfter, bool interactive)
     {
         var active = _rows.Where(r => !r.Deleted).ToList();
         var names = new List<string>();
@@ -244,26 +300,28 @@ public partial class TagManagerWindow : Window
             var name = row.NameBox.Text.Trim();
             if (name.Length == 0)
             {
-                MessageBox.Show("标签名不能为空。", "保存失败", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
+                if (interactive) MessageBox.Show("标签名不能为空。", "保存失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                else StatusText.Text = "有标签名为空，自动保存暂停；补齐后会自动重试。";
+                return false;
             }
             if (names.Any(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase)))
             {
-                MessageBox.Show($"标签名「{name}」重复了。", "保存失败", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
+                if (interactive) MessageBox.Show($"标签名「{name}」重复了。", "保存失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                else StatusText.Text = $"标签名「{name}」重复，自动保存暂停；改好后会自动重试。";
+                return false;
             }
             names.Add(name);
         }
 
         var toDelete = _rows.Where(r => r.Deleted && r.Original is not null).ToList();
-        if (toDelete.Count > 0)
+        if (interactive && toDelete.Count > 0)
         {
             var used = toDelete.Count(r => r.Original!.UsageCount > 0);
             var msg = used > 0
                 ? $"有 {toDelete.Count} 个标签要删除，其中 {used} 个正被文件夹使用。\n\n删除后会解除这些关联，磁盘上的原始目录不受影响。继续？"
                 : $"删除 {toDelete.Count} 个标签？\n\n磁盘上的原始目录不受影响。";
             if (MessageBox.Show(msg, "确认删除", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
-                return;
+                return false;
         }
 
         try
@@ -281,22 +339,50 @@ public partial class TagManagerWindow : Window
 
                 if (row.Original is null)
                 {
-                    _db.EnsureTag(name, category.Length == 0 ? null : category);
+                    var id = _db.EnsureTag(name, category.Length == 0 ? null : category);
+                    row.Original = new TagInfo { Id = id, Name = name, Category = category };
                 }
                 else
                 {
-                    if (!string.Equals(name, row.Original.Name, StringComparison.Ordinal)) _db.RenameTag(row.Original.Id, name);
-                    if (!string.Equals(category, row.Original.Category, StringComparison.Ordinal)) _db.SetTagCategory(row.Original.Id, category);
+                    if (!string.Equals(name, row.Original.Name, StringComparison.Ordinal))
+                    {
+                        _db.RenameTag(row.Original.Id, name);
+                        row.Original.Name = name;
+                    }
+                    if (!string.Equals(category, row.Original.Category, StringComparison.Ordinal))
+                    {
+                        _db.SetTagCategory(row.Original.Id, category);
+                        row.Original.Category = category;
+                    }
                 }
             }
 
-            Changed = _dirty;
-            _saved = true;
-            Close();
+            // 已经落库的删除行从列表里拿掉，避免下一次保存重复删。
+            foreach (var row in toDelete)
+            {
+                _rows.Remove(row);
+                RowPanel.Children.Remove(row.Container);
+            }
+
+            _dirty = false;
+            Changed = true;
+            _autoSaveTimer.Stop();
+
+            if (closeAfter)
+            {
+                _saved = true;
+                Close();
+                return true;
+            }
+
+            StatusText.Text = $"已自动写入（{DateTime.Now:HH:mm:ss}）。";
+            return true;
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message, "保存失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            if (interactive) MessageBox.Show(ex.Message, "保存失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            else StatusText.Text = $"自动保存失败：{ex.Message}";
+            return false;
         }
     }
 
@@ -304,7 +390,21 @@ public partial class TagManagerWindow : Window
 
     private void OnClosing(object? sender, CancelEventArgs e)
     {
-        if (_saved || !_dirty) return;
+        if (_saved) return;
+        _autoSaveTimer.Stop();
+        if (_autoApply)
+        {
+            // 关窗前把还没到点的改动落库；真的写不进去才询问，避免悄悄丢修改。
+            if (!_dirty) return;
+            if (!ApplyChanges(closeAfter: false, interactive: false))
+            {
+                if (MessageBox.Show("有修改没能自动写入，仍要关闭并放弃吗？", "自动保存失败",
+                        MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                    e.Cancel = true;
+            }
+            return;
+        }
+        if (!_dirty) return;
         if (MessageBox.Show("有未保存的修改，确定关闭？", "放弃修改", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
             e.Cancel = true;
     }

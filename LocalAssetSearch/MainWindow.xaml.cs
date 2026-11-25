@@ -105,18 +105,20 @@ public partial class MainWindow : Window
         await ScanRootAsync(root, auto: true);
     }
 
-    private const int RandomSortIndex = 5;
+    private const int ImageCountSortIndex = 5;
+    private const int RandomSortIndex = 6;
 
     private static int ReadSavedSortIndex()
         => int.TryParse(Settings.Get("sort", "0"), out var i) && i >= 0 && i <= RandomSortIndex ? i : 0;
 
-    /// <summary>当前排序方式，与 SortBox 的六个选项一一对应。</summary>
+    /// <summary>当前排序方式，与 SortBox 的七个选项一一对应。</summary>
     private SortMode CurrentSort => SortBox.SelectedIndex switch
     {
         1 => SortMode.FavoriteOrderDesc,
         2 => SortMode.TitleAsc,
         3 => SortMode.TitleDesc,
         4 => SortMode.GlobalIndex,
+        ImageCountSortIndex => SortMode.ImageCount,
         RandomSortIndex => SortMode.Random,
         _ => SortMode.FavoriteOrder,
     };
@@ -146,6 +148,17 @@ public partial class MainWindow : Window
 
     private void UpdateThemeButton() =>
         ThemeButton.Content = ThemeManager.IsDark ? "浅色模式" : "深色模式";
+
+    /// <summary>清空启动日志（程序是 WinExe，日志是排查启动问题的唯一线索，这里只清不删路径）。</summary>
+    private void CleanLog_Click(object sender, RoutedEventArgs e)
+    {
+        long size = 0;
+        try { if (File.Exists(StartupLog.LogPath)) size = new FileInfo(StartupLog.LogPath).Length; } catch { }
+        var ask = $"清空启动日志？\n\n{StartupLog.LogPath}\n当前 {size / 1024.0:0.0} KB\n\n不影响索引、标签和设置。";
+        if (System.Windows.MessageBox.Show(ask, "清理日志", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        var freed = StartupLog.Clear();
+        StatusText.Text = $"日志已清空（释放 {freed / 1024.0:0.0} KB）。";
+    }
 
     /// <summary>切换浅色 / 深色。标签栏里那些代码创建的控件颜色是建的时候取的，所以要重建一次。</summary>
     private void Theme_Click(object sender, RoutedEventArgs e)
@@ -313,47 +326,43 @@ public partial class MainWindow : Window
         try
         {
             TagPanel.Children.Clear(); _tagChecks.Clear(); _tagIdByName.Clear(); _selectedTags.Clear();
-            string currentCategory = "";
-            UniformGrid? columnPanel = null;
-            foreach (var tag in _db.GetTags())
+            foreach (var (groupName, groupTags) in TagGroupView.Group(_db.GetTags()))
             {
-                if (!string.Equals(tag.CategoryLabel, currentCategory, StringComparison.OrdinalIgnoreCase))
+                // 每个分类下面固定两列；UniformGrid 按实际可用宽度分，滚动条也不会把它挤成一列。
+                var columnPanel = new UniformGrid { Columns = 2 };
+                foreach (var tag in groupTags)
                 {
-                    currentCategory = tag.CategoryLabel;
-                    TagPanel.Children.Add(TagHeader.Create(currentCategory).Root);
-                    // 每个分类下面固定两列；UniformGrid 按实际可用宽度分，滚动条也不会把它挤成一列。
-                    columnPanel = new UniformGrid { Columns = 2 };
-                    TagPanel.Children.Add(columnPanel);
+                    _tagIdByName[tag.Name] = tag.Id;
+                    var label = new TextBlock
+                    {
+                        Text = tag.Name,
+                        TextTrimming = TextTrimming.CharacterEllipsis,
+                        ToolTip = tag.Name,
+                        MaxWidth = 112,
+                    };
+                    var cb = new CheckBox
+                    {
+                        Content = label,
+                        Tag = tag.Id,
+                        Margin = new Thickness(2, 3, 2, 3),
+                        ToolTip = tag.Name,
+                    };
+                    cb.Checked += async (_, _) => { if (_loadingTags) return; _selectedTags.Add(tag.Id); await SearchFromFirstPageAsync(); };
+                    cb.Unchecked += async (_, _) => { if (_loadingTags) return; _selectedTags.Remove(tag.Id); await SearchFromFirstPageAsync(); };
+
+                    // 右键左侧标签也能直接编辑文字，不必打开标签管理。
+                    var menu = new ContextMenu();
+                    var edit = new MenuItem { Header = "编辑标签文字…", Tag = tag.Id };
+                    edit.Click += RenameFilterTag_Click;
+                    menu.Items.Add(edit);
+                    cb.ContextMenu = menu;
+
+                    columnPanel.Children.Add(cb);
+                    _tagChecks[tag.Id] = cb;
+                    if (previously.Contains(tag.Id)) { _selectedTags.Add(tag.Id); cb.IsChecked = true; }
                 }
 
-                _tagIdByName[tag.Name] = tag.Id;
-                var label = new TextBlock
-                {
-                    Text = tag.Name,
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                    ToolTip = tag.Name,
-                    MaxWidth = 112,
-                };
-                var cb = new CheckBox
-                {
-                    Content = label,
-                    Tag = tag.Id,
-                    Margin = new Thickness(2, 3, 2, 3),
-                    ToolTip = tag.Name,
-                };
-                cb.Checked += async (_, _) => { if (_loadingTags) return; _selectedTags.Add(tag.Id); await SearchFromFirstPageAsync(); };
-                cb.Unchecked += async (_, _) => { if (_loadingTags) return; _selectedTags.Remove(tag.Id); await SearchFromFirstPageAsync(); };
-
-                // 右键左侧标签也能直接编辑文字，不必打开标签管理。
-                var menu = new ContextMenu();
-                var edit = new MenuItem { Header = "编辑标签文字…", Tag = tag.Id };
-                edit.Click += RenameFilterTag_Click;
-                menu.Items.Add(edit);
-                cb.ContextMenu = menu;
-
-                columnPanel!.Children.Add(cb);
-                _tagChecks[tag.Id] = cb;
-                if (previously.Contains(tag.Id)) { _selectedTags.Add(tag.Id); cb.IsChecked = true; }
+                TagGroupView.AddCollapsible(TagPanel, groupName, TagGroupView.IsAuthorGroup(groupName), columnPanel);
             }
 
             if (TagPanel.Children.Count == 0)
@@ -819,7 +828,7 @@ public partial class MainWindow : Window
     /// 老的照片查看器组件太旧、部分系统已移除。自己写的看图窗口左右键翻页一定可用。
     /// 想用系统程序的话，右键菜单里仍然保留了「用 Windows 图片打开第一张」。
     /// </summary>
-    private void OpenInAppViewer(string folderPath)
+    private void OpenInAppViewer(string folderPath, bool activate = true)
     {
         if (FolderCover.ListImages(folderPath).Count == 0)
         {
@@ -830,8 +839,50 @@ public partial class MainWindow : Window
         // 每次点都开一个新窗口，所以可以多开。
         // 刻意**不设 Owner**：被拥有的窗口永远盖在拥有者上面，Alt+Tab 切回工具窗口时也会被它挡住；
         // 而且被拥有的窗口不进任务栏，多开之后不好找。不设 Owner 才有独立、可切换的多窗口。
-        new ImageViewerWindow(folderPath).Show();
+        var viewer = new ImageViewerWindow(folderPath);
+        if (activate)
+        {
+            viewer.Show();
+            return;
+        }
+
+        // Ctrl+左键 / 中键：后台打开，不激活、不抢焦点，主窗口仍然在最前。
+        // WPF 不允许 ShowActivated=false 和 WindowState=Maximized 同时出现在 Show 上（会抛异常），
+        // 所以先用普通窗口显示，显示完再切成最大化——这样后台打开也是全屏的。
+        viewer.ShowActivated = false;
+        viewer.WindowState = WindowState.Normal;
+        viewer.WindowStartupLocation = WindowStartupLocation.Manual;
+        var work = SystemParameters.WorkArea;
+        viewer.Left = work.Left;
+        viewer.Top = work.Top;
+        viewer.Width = work.Width;
+        viewer.Height = work.Height;
+        viewer.Show();
+
+        viewer.Dispatcher.BeginInvoke(new Action(() =>
+        {
+            viewer.WindowState = WindowState.Maximized;
+            // 光 ShowActivated=false 只是不抢焦点，新窗口仍会盖在主窗口上面；
+            // 再把它压到 Z 序最底，才真的「不显示在最前」（用 Alt+Tab / 任务栏切过去）。
+            var handle = new System.Windows.Interop.WindowInteropHelper(viewer).Handle;
+            if (handle != IntPtr.Zero)
+                SetWindowPos(handle, HwndBottom, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
+        }), System.Windows.Threading.DispatcherPriority.Loaded);
+
+        var name = Path.GetFileName(folderPath.TrimEnd(Path.DirectorySeparatorChar));
+        StatusText.Text = $"已在后台全屏打开「{name}」——不抢焦点，用 Alt+Tab 或任务栏切过去。";
     }
+
+    private static readonly IntPtr HwndBottom = new(1);
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoActivate = 0x0010;
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    /// <summary>自检用：直接驱动「打开看图窗口」这条路径（含后台打开的兼容处理）。</summary>
+    internal void OpenInAppViewerForTest(string folderPath, bool activate) => OpenInAppViewer(folderPath, activate);
 
     /// <summary>用 Windows 图片（系统默认关联）打开第一张。</summary>
     private void OpenWithWindowsPhotos(string folderPath)
@@ -847,10 +898,20 @@ public partial class MainWindow : Window
         StatusText.Text = $"已用 Windows 图片打开 {Path.GetFileName(first)}";
     }
 
-    /// <summary>点封面 = 在工具里看图。</summary>
+    /// <summary>点封面 = 在工具里看图；Ctrl+左键开在后台，不抢当前前台窗口。</summary>
     private void Cover_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.Tag is string folder) OpenInAppViewer(folder);
+        if (sender is not FrameworkElement fe || fe.Tag is not string folder) return;
+        var background = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        OpenInAppViewer(folder, activate: !background);
+    }
+
+    /// <summary>中键点封面：和 Ctrl+左键一样，在后台打开看图窗口。</summary>
+    private void Cover_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Middle) return;
+        e.Handled = true;
+        if (sender is FrameworkElement fe && fe.Tag is string folder) OpenInAppViewer(folder, activate: false);
     }
 
     /// <summary>点作品名称 = 在资源管理器里打开这个文件夹。</summary>

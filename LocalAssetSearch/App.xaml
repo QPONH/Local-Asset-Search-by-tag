@@ -256,6 +256,9 @@
    <Setter Property="Background" Value="{DynamicResource Brush.Surface}"/>
    <Setter Property="Foreground" Value="{DynamicResource Brush.Text}"/>
    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}"/>
+   <!-- 提示窗不参与鼠标交互：它悬在画面上时滚轮/点击要照常落到下面的窗口，
+        否则鼠标一停就弹出来、滚轮事件全被它吃掉。 -->
+   <Setter Property="IsHitTestVisible" Value="False"/>
    <Setter Property="Template">
     <Setter.Value>
      <ControlTemplate TargetType="ToolTip">
