@@ -31,7 +31,6 @@ public partial class MainWindow : Window
     private bool _initializing = true;
     private bool _autoRefreshOnStart;
     private bool _scanning;
-    private HistoryWindow? _historyWindow;
 
     // 触控板会连发几十个小 delta，而 ScrollViewer 默认每个 notch 滚 3 行；这里卡片高 372px，
     // 等于滚一格就跳将近两屏。改成「按像素连续滚动 + 短缓动」：每个 delta 只走
@@ -764,7 +763,13 @@ public partial class MainWindow : Window
 
     private void ManageTags_Click(object sender, RoutedEventArgs e)
     {
+        if (SingleWindow.TryActivate("tagManager"))
+        {
+            StatusText.Text = "标签管理窗口已经打开了，已切换到前台。";
+            return;
+        }
         var win = new TagManagerWindow(_db);
+        SingleWindow.Track("tagManager", win);
         ShowTagWindow(win, () => win.Changed);
     }
 
@@ -780,15 +785,28 @@ public partial class MainWindow : Window
     /// <summary>打开标签选择窗口；刻意不设 Owner、也不用 ShowDialog，避免挡住主窗口的翻页。</summary>
     private void TagOne(AssetItem item)
     {
+        var key = "tagPicker:" + item.Id;
+        if (SingleWindow.TryActivate(key))
+        {
+            StatusText.Text = $"「{item.Name}」的打标签窗口已经打开了，已切换到前台。";
+            return;
+        }
         var win = new TagPickerWindow(_db, new List<AssetItem> { item });
+        SingleWindow.Track(key, win);
         ShowTagWindow(win, () => win.Changed);
     }
 
     private void FolderTags_Click(object sender, RoutedEventArgs e)
     {
+        if (SingleWindow.TryActivate("folderTag"))
+        {
+            StatusText.Text = "管理文件夹标签窗口已经打开了，已切换到前台。";
+            return;
+        }
         var folders = _db.GetFolders();
         if (folders.Count == 0) { System.Windows.MessageBox.Show("请先扫描一个目录。", "没有已索引目录"); return; }
         var win = new FolderTagWindow(_db, folders);
+        SingleWindow.Track("folderTag", win);
         ShowTagWindow(win, () => win.Changed);
     }
 
@@ -796,14 +814,14 @@ public partial class MainWindow : Window
 
     private void History_Click(object sender, RoutedEventArgs e)
     {
-        if (_historyWindow is { IsVisible: true })
+        if (SingleWindow.TryActivate("history"))
         {
-            _historyWindow.Activate();
+            StatusText.Text = "历史记录窗口已经打开了，已切换到前台。";
             return;
         }
-        _historyWindow = new HistoryWindow();
-        _historyWindow.Closed += (_, _) => _historyWindow = null;
-        _historyWindow.Show();
+        var win = new HistoryWindow();
+        SingleWindow.Track("history", win);
+        win.Show();
     }
 
     private async void Clear_Click(object sender, RoutedEventArgs e)
@@ -836,10 +854,26 @@ public partial class MainWindow : Window
             return;
         }
 
-        // 每次点都开一个新窗口，所以可以多开。
+        // 同一个作品只开一个看图窗口：已经开着就切过去，不再叠一个新窗口。
+        var key = "viewer:" + Path.GetFullPath(folderPath).TrimEnd(Path.DirectorySeparatorChar).ToLowerInvariant();
+        if (SingleWindow.TryActivate(key))
+        {
+            StatusText.Text = "这个作品的看图窗口已经打开了，已切换到前台。";
+            return;
+        }
+
         // 刻意**不设 Owner**：被拥有的窗口永远盖在拥有者上面，Alt+Tab 切回工具窗口时也会被它挡住；
         // 而且被拥有的窗口不进任务栏，多开之后不好找。不设 Owner 才有独立、可切换的多窗口。
         var viewer = new ImageViewerWindow(folderPath);
+        SingleWindow.Track(key, viewer);
+        // 侧边栏改过标签：关窗时把结果列表和左侧标签一起刷新，否则卡片上的标签芯片还是旧的。
+        viewer.Closed += (_, _) =>
+        {
+            if (!viewer.TagsChanged || !IsLoaded) return;
+            LoadTags();
+            _ = SearchAsync(resetScroll: false);
+        };
+
         if (activate)
         {
             viewer.Show();
@@ -883,6 +917,9 @@ public partial class MainWindow : Window
 
     /// <summary>自检用：直接驱动「打开看图窗口」这条路径（含后台打开的兼容处理）。</summary>
     internal void OpenInAppViewerForTest(string folderPath, bool activate) => OpenInAppViewer(folderPath, activate);
+
+    /// <summary>自检用：直接驱动「打开标签管理」这条路径（验证单例行为）。</summary>
+    internal void ManageTagsForTest() => ManageTags_Click(this, new RoutedEventArgs());
 
     /// <summary>用 Windows 图片（系统默认关联）打开第一张。</summary>
     private void OpenWithWindowsPhotos(string folderPath)

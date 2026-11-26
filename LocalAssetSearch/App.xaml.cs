@@ -474,6 +474,35 @@ public partial class App : Application
                     StartupLog.Write($"自检 后台打开看图窗口: 失败 -> {ex.GetType().Name}: {ex.Message}");
                 }
 
+                // 同一个窗口重复打开：不再开第二个，把已有的切到前台。
+                try
+                {
+                    win.ManageTagsForTest();
+                    win.ManageTagsForTest();
+                    await Task.Delay(200);
+                    var managers = Application.Current.Windows.OfType<TagManagerWindow>().Where(x => x.IsVisible).ToList();
+                    if (managers.Count != 1)
+                        throw new InvalidOperationException($"标签管理窗口应该只有一个，实际 {managers.Count}");
+                    foreach (var manager in managers) manager.Close();
+                    await Task.Delay(200);
+
+                    var beforeViewers = Application.Current.Windows.OfType<ImageViewerWindow>().Count();
+                    win.OpenInAppViewerForTest(pics, activate: true);
+                    await Task.Delay(300);
+                    win.OpenInAppViewerForTest(pics, activate: true);
+                    await Task.Delay(300);
+                    var viewers = Application.Current.Windows.OfType<ImageViewerWindow>().ToList();
+                    if (viewers.Count != beforeViewers + 1)
+                        throw new InvalidOperationException($"同一作品重复打开应该只保留一个看图窗口，实际多了 {viewers.Count - beforeViewers} 个");
+                    foreach (var viewer in viewers) viewer.Close();
+                    StartupLog.Write("自检 单例窗口: 标签管理 / 看图器重复打开都只保留一个");
+                }
+                catch (Exception ex)
+                {
+                    failures++;
+                    StartupLog.Write($"自检 单例窗口: 失败 -> {ex.GetType().Name}: {ex.Message}");
+                }
+
                 win.Close();
             }
             catch (Exception ex)
@@ -930,6 +959,9 @@ public partial class App : Application
                     if (assetId is null) throw new InvalidOperationException("测试文件夹不在索引里");
                     if (!db!.GetAssetTagNames(assetId.Value).Contains(tagName))
                         throw new InvalidOperationException($"勾选「{tagName}」后没有立即写入数据库");
+                    // 关窗时主窗口要靠这个标记决定要不要刷新列表。
+                    if (!w.TagsChanged)
+                        throw new InvalidOperationException("侧边栏改标签后 TagsChanged 没有置位");
                     StartupLog.Write($"自检 看图标签侧边栏: {boxes.Count} 个标签，勾选「{tagName}」已即时写入");
                 }
                 finally { if (w.IsVisible) w.Close(); }

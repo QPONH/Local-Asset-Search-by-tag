@@ -557,12 +557,16 @@ public partial class ImageViewerWindow : Window
         finally { _tagSidebarLoading = false; }
     }
 
+    /// <summary>侧边栏改过标签（关窗时主窗口据此刷新列表）。</summary>
+    public bool TagsChanged { get; private set; }
+
     private void ApplySidebarTag(long assetId, string tagName, bool add)
     {
         if (_tagSidebarLoading) return;
         try
         {
             _db.ApplyTag(assetId, tagName, remove: !add);
+            TagsChanged = true;
         }
         catch (Exception ex)
         {
