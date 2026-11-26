@@ -104,6 +104,7 @@ public partial class ImageViewerWindow : Window
     internal int VerticalImageCountForTest => _verticalImages.Count;
     internal double GapForTest => _gap;
     internal double ScrollSpeedForTest => _scrollSpeed;
+    internal IReadOnlyList<double> VerticalImageWidthsForTest => _verticalImages.Select(i => i.Width).ToList();
 
     public ImageViewerWindow(string folderPath)
     {
@@ -113,6 +114,7 @@ public partial class ImageViewerWindow : Window
         // 打开一律最大化；全屏/还原时用 RestoreBounds 回到普通尺寸。
         WindowState = WindowState.Maximized;
         Viewport.SizeChanged += (_, _) => UpdatePageSizes();
+        VerticalViewer.SizeChanged += (_, _) => LayoutVerticalImages();
 
         var name = Path.GetFileName(folderPath.TrimEnd(Path.DirectorySeparatorChar));
         Title = string.IsNullOrEmpty(name) ? "看图" : $"{name} — 看图";
@@ -420,12 +422,40 @@ public partial class ImageViewerWindow : Window
                     if (version != _verticalVersion) return;
                     _verticalImages[i].Source = bitmap;
                 }
+                LayoutVerticalImage(_verticalImages[i]);
             }
             catch
             {
                 if (version != _verticalVersion) return;
             }
         }
+
+        // 全部解码完再统一按最终宽度排一遍：滚动条出现后可用宽度会变，
+        // 边加载边算会让先加载的那几张比后面的宽。
+        LayoutVerticalImages();
+    }
+
+    /// <summary>
+    /// 竖排里每张图都要铺满可用宽度：宽度统一 = 视口宽，高度按各自比例算。
+    /// 比可用宽度大的整体缩小、小的整体放大，这样一条竖列看起来才整齐（不会一张宽一张窄）。
+    /// </summary>
+    private void LayoutVerticalImage(Image image)
+    {
+        if (_layout != ViewerLayout.Vertical) return;
+        var width = VerticalViewer.ViewportWidth;
+        if (width <= 0) width = VerticalViewer.ActualWidth;
+        if (width <= 0) return;
+        if (image.Source is not BitmapSource bitmap || bitmap.PixelWidth <= 0 || bitmap.PixelHeight <= 0) return;
+
+        image.Width = width;
+        image.Height = Math.Max(1, bitmap.PixelHeight * (width / bitmap.PixelWidth));
+    }
+
+    /// <summary>窗口尺寸变化后重新按新宽度铺一遍。</summary>
+    private void LayoutVerticalImages()
+    {
+        if (_layout != ViewerLayout.Vertical) return;
+        foreach (var image in _verticalImages) LayoutVerticalImage(image);
     }
 
     private void VerticalViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
@@ -434,11 +464,7 @@ public partial class ImageViewerWindow : Window
         if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
         {
             e.Handled = true;
-            _verticalZoomTarget = Math.Clamp(_verticalZoomTarget * Math.Pow(1.08, e.Delta / 120.0), 0.5, 5);
-            // 同样限制"欠账"：目标最多领先当前值 40%，松手后马上停住。
-            _verticalZoomTarget = Math.Clamp(_verticalZoomTarget, _verticalZoom / 1.4, _verticalZoom * 1.4);
-            _verticalZoomTarget = Math.Clamp(_verticalZoomTarget, 0.5, 5);
-            if (!_verticalZoomTimer.IsEnabled) _verticalZoomTimer.Start();
+            ZoomVerticalBy(e.Delta);
             return;
         }
 
@@ -448,6 +474,21 @@ public partial class ImageViewerWindow : Window
         var target = VerticalViewer.VerticalOffset - e.Delta * 0.9;
         VerticalViewer.ScrollToVerticalOffset(Math.Clamp(target, 0, VerticalViewer.ScrollableHeight));
     }
+
+    /// <summary>
+    /// 竖排缩放：不按 120 取整，1 个 delta 单位 = 0.0015 倍（鼠标一格约 0.18 倍），
+    /// 触摸板的小 delta 也连续累加；目标最多领先当前值 40%，松手后马上停住。
+    /// </summary>
+    private void ZoomVerticalBy(int delta)
+    {
+        _verticalZoomTarget = Math.Clamp(_verticalZoomTarget + delta * 0.0015, 0.5, 5);
+        _verticalZoomTarget = Math.Clamp(_verticalZoomTarget, _verticalZoom / 1.4, _verticalZoom * 1.4);
+        _verticalZoomTarget = Math.Clamp(_verticalZoomTarget, 0.5, 5);
+        if (!_verticalZoomTimer.IsEnabled) _verticalZoomTimer.Start();
+    }
+
+    /// <summary>自检用：直接喂一个滚轮 delta（Ctrl 修饰键不好在自动化里模拟）。</summary>
+    internal void ZoomVerticalByForTest(int delta) => ZoomVerticalBy(delta);
 
     private void VerticalZoomTimer_Tick(object? sender, EventArgs e)
     {
@@ -462,8 +503,23 @@ public partial class ImageViewerWindow : Window
         }
         var step = Math.Clamp(diff * 0.6, -0.03, 0.03);
         if (Math.Abs(diff) < 0.002) step = diff;
-        _verticalZoom += step;
+        ApplyVerticalZoomStep(step);
+    }
+
+    /// <summary>
+    /// 缩放时把滚动位置按比例跟着调，否则 LayoutTransform 一变，视口里看到的内容会整体
+    /// 往上/往下跑，看起来就像"缩放的同时还在滚动"。
+    /// </summary>
+    private void ApplyVerticalZoomStep(double delta)
+    {
+        var oldZoom = _verticalZoom;
+        var newZoom = Math.Clamp(oldZoom + delta, 0.5, 5);
+        if (Math.Abs(newZoom - oldZoom) < 1e-9) return;
+
+        var offset = VerticalViewer.VerticalOffset;
+        _verticalZoom = newZoom;
         ApplyVerticalZoom();
+        VerticalViewer.ScrollToVerticalOffset(offset * (newZoom / oldZoom));
     }
 
     private void ScrollTimer_Tick(object? sender, EventArgs e)
@@ -1166,6 +1222,12 @@ public partial class ImageViewerWindow : Window
             e.Key != Key.Escape &&
             e.Key != Key.F11 &&
             !(e.Key == Key.W && (Keyboard.Modifiers & ModifierKeys.Control) != 0))
+            return;
+
+        // 带 Ctrl / Alt 的组合键不再触发单键的翻页 / 滚动 / 调速度（Ctrl+W、F11 后面单独处理）。
+        var hasModifier = (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) != 0;
+        if (hasModifier && e.Key is Key.Left or Key.Right or Key.Space or Key.Up or Key.Down
+            or Key.PageUp or Key.PageDown or Key.Home or Key.End)
             return;
 
         // 竖排模式：上下键调自动下滑速度，PageUp/PageDown/空格滚动。

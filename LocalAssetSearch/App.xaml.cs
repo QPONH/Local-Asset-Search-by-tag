@@ -1012,6 +1012,13 @@ public partial class App : Application
                     if (Math.Abs(w.GapForTest - 40) > 0.01)
                         throw new InvalidOperationException($"间隔没有生效：{w.GapForTest}");
 
+                    // 竖排缩放：Ctrl+滚轮走线性无极（1 delta = 0.0015 倍）。
+                    w.ZoomVerticalByForTest(120);
+                    await Task.Delay(400);
+                    if (Math.Abs(w.VerticalZoomForTest - 1.18) > 0.01)
+                        throw new InvalidOperationException($"竖排无极缩放应当是 1.18 倍，实际 {w.VerticalZoomForTest:0.000}");
+                    w.SetVerticalZoomForTest(1);
+
                     // 竖排放大倍率（Ctrl+滚轮走的就是这条路径）。
                     w.SetVerticalZoomForTest(2);
                     await Task.Delay(100);
@@ -1026,6 +1033,12 @@ public partial class App : Application
 
                     if (w.VerticalViewer.ScrollableHeight <= 0)
                         throw new InvalidOperationException("竖排内容没有超出一屏，测不了滚动");
+
+                    // 每张图的宽度必须一致（都铺满可用宽度），不能一张宽一张窄。
+                    var widths = w.VerticalImageWidthsForTest.Where(x => x > 0).ToList();
+                    if (widths.Count == 0) throw new InvalidOperationException("竖排图片没有设置宽度");
+                    if (widths.Distinct().Count() != 1)
+                        throw new InvalidOperationException($"竖排图片宽度不一致：{string.Join("、", widths.Select(x => x.ToString("0")))}");
 
                     w.IntervalBox.Text = "900";
                     w.AutoPageCheck.IsChecked = true;
